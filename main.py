@@ -14,7 +14,6 @@ import io
 from datetime import datetime
 import os
 import sys
-from bs4 import BeautifulSoup
 from google.cloud import storage
 from google.cloud import secretmanager
 
@@ -679,6 +678,7 @@ def print_statistics(results):
 if __name__ == "__main__":
     print("\n" + "=" * 80)
     print("🚀 HYBRID NEWS SCRAPER (Diffbot + Trafilatura)")
+    print("LET'S GO! 🚀")
     print("=" * 80)
     print(f"✨ Features:")
     print(f"   ✅ Multi-page article scraping")
@@ -686,8 +686,6 @@ if __name__ == "__main__":
     print(f"   ✅ Automatic pagination detection")
     print(f"   ✅ Auto-retry for 403 errors (up to {MAX_RETRIES}x)")
     print(f"   ✅ GCS integration for Cloud Run")
-    print(f"\n📦 Requirements:")
-    print(f"   pip install trafilatura requests beautifulsoup4 google-cloud-storage")
     
     # Read input
     input_filename = None
