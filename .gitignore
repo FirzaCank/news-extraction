@@ -47,8 +47,8 @@ log/
 *.log
 
 # Input/Output CSV (optional - uncomment if needed)
-# input/*.csv
-# output/*.csv
+input/*.csv
+output/*.csv
 
 # Testing
 .pytest_cache/
