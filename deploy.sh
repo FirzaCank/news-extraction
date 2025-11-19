@@ -34,7 +34,7 @@ gcloud auth configure-docker ${REGION}-docker.pkg.dev
 # 3. Build Docker image
 echo ""
 echo "🔨 Step 3: Building Docker image..."
-docker build -t ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/${IMAGE_NAME}:latest .
+docker build --platform linux/amd64 -t ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/${IMAGE_NAME}:latest .
 
 # 4. Push to Artifact Registry
 echo ""

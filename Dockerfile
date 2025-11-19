@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY main_from_container.py main.py
+COPY main.py .
 
 # Create necessary directories
 RUN mkdir -p /app/output_news /app/log

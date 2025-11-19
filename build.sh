@@ -7,12 +7,12 @@ set -e
 
 IMAGE_NAME="news-scraper"
 
-echo "=================================================="
-echo "🔨 Building Docker Image"
-echo "=================================================="
+echo "================================================="="
+ echo "🔨 Building Docker Image"
+ echo "================================================="="
 
-# Build image
-docker build -t ${IMAGE_NAME}:latest .
+# Build image with platform flag for Cloud Run compatibility
+docker build --platform linux/amd64 -t ${IMAGE_NAME}:latest .
 
 echo ""
 echo "✅ Build completed!"
