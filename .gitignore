@@ -43,6 +43,7 @@ Thumbs.db
 # Project specific
 output/
 output_news/
+parsed/
 log/
 *.log
 
