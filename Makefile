@@ -17,6 +17,12 @@ help:
 	@echo "  make deploy      - Deploy to Cloud Run Job"
 	@echo "  make all-deploy  - Build + Push + Deploy (all in one)"
 	@echo ""
+	@echo "Parsing (AI-powered):"
+	@echo "  make parse       - Parse latest output CSV (uses AI_PROVIDER from .env)"
+	@echo "  make parse-file  - Parse specific file: make parse-file FILE=output/file.csv"
+	@echo "  make parse-gemini - Parse with Google Gemini (explicit override)"
+	@echo "  make parse-openai - Parse with OpenAI (explicit override)"
+	@echo ""
 	@echo "Utilities:"
 	@echo "  make clean       - Clean output files and logs"
 	@echo "  make logs        - View recent Cloud Run Job logs"
@@ -122,9 +128,60 @@ logs:
 		--limit 50 \
 		--project=robotic-pact-466314-b3
 
+# Parse latest output CSV with AI (respects AI_PROVIDER from .env)
+parse:
+	@echo "🤖 Parsing latest output CSV with AI..."
+	@if [ ! -f .env ]; then \
+		echo "❌ Error: .env file not found!"; \
+		exit 1; \
+	fi
+	@mkdir -p log
+	@export $$(cat .env | grep -v '^\#' | xargs) && \
+		./venv/bin/python parse_news.py 2>&1 | tee log/parser.log
+	@echo "📄 Log saved to: log/parser.log"
+
+# Parse specific file
+parse-file:
+	@if [ -z "$(FILE)" ]; then \
+		echo "❌ Error: FILE parameter required"; \
+		echo "   Usage: make parse-file FILE=output/output_20251126_230736.csv"; \
+		exit 1; \
+	fi
+	@echo "🤖 Parsing $(FILE) with AI..."
+	@mkdir -p log
+	@export $$(cat .env | grep -v '^\#' | xargs) && \
+		./venv/bin/python parse_news.py $(FILE) 2>&1 | tee log/parser.log
+	@echo "📄 Log saved to: log/parser.log"
+
+# Parse with Gemini (explicit)
+parse-gemini:
+	@echo "🤖 Parsing with Google Gemini..."
+	@if [ ! -f .env ]; then \
+		echo "❌ Error: .env file not found!"; \
+		exit 1; \
+	fi
+	@mkdir -p log
+	@export $$(cat .env | grep -v '^\#' | xargs) && \
+		AI_PROVIDER=gemini ./venv/bin/python parse_news.py 2>&1 | tee log/parser_gemini.log
+	@echo "📄 Log saved to: log/parser_gemini.log"
+
+# Parse with OpenAI (explicit)
+parse-openai:
+	@echo "🤖 Parsing with OpenAI..."
+	@if [ ! -f .env ]; then \
+		echo "❌ Error: .env file not found!"; \
+		exit 1; \
+	fi
+	@mkdir -p log
+	@export $$(cat .env | grep -v '^\#' | xargs) && \
+		AI_PROVIDER=openai ./venv/bin/python parse_news.py 2>&1 | tee log/parser_openai.log
+	@echo "📄 Log saved to: log/parser_openai.log"
+
 # Clean output and logs
 clean:
 	@echo "🧹 Cleaning output files and logs..."
 	rm -rf output/*.csv
+	rm -rf parsed/*.csv
 	rm -f local_test_run.log
+	rm -f log/parser*.log
 	@echo "✅ Clean completed!"

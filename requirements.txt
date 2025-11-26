@@ -28,6 +28,10 @@ google-cloud-storage==2.14.0
 # Google Cloud Secret Manager
 google-cloud-secret-manager==2.18.0
 
+# AI Libraries for parsing
+google-generativeai==0.8.5
+openai>=1.0.0
+
 # Web server for Cloud Run
 Flask==3.0.0
 gunicorn==21.2.0
