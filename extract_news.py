@@ -564,9 +564,8 @@ def save_to_gcs(results, bucket_name, output_path, input_filename=None):
             output_filename = f"text_output_{timestamp}.csv"
             print(f"⚠️  No input filename provided, using: {output_filename}")
         
-        # Remove trailing slash from output_path to avoid double slash
-        output_path = output_path.rstrip('/')
-        blob_path = f"{output_path}/{output_filename}"
+        # Force output path to text_output for extract phase
+        blob_path = f"text_output/{output_filename}"
         blob = bucket.blob(blob_path)
         
         # Create CSV in memory
