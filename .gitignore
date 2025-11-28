@@ -19,6 +19,8 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+
+# Virtual Environment
 venv/
 env/
 ENV/
@@ -40,18 +42,32 @@ Thumbs.db
 *.json
 !requirements.txt
 
-# Project specific
-output/
-output_news/
-parsed/
+# Project Output Directories (generated data)
+text_output/
+final_output/
 log/
 *.log
+local_test_run.log
 
-# Input/Output CSV (optional - uncomment if needed)
-input/*.csv
-output/*.csv
+# Input Data (keep structure, ignore actual data files)
+link_input/*.csv
+whitelist_input/*.csv
+# But keep example files
+!link_input/.gitkeep
+!whitelist_input/.gitkeep
 
 # Testing
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Docker
+.dockerignore
+
+# Legacy files (if any)
+output/
+output_news/
+input/
+whitelist/
+parsed/
+main.py

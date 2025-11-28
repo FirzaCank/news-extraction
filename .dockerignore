@@ -1,4 +1,4 @@
-# Docker
+# Python cache and build artifacts
 __pycache__/
 *.py[cod]
 *$py.class
@@ -20,39 +20,66 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual Environment
+# Virtual Environment (tidak perlu di Docker)
 venv/
 env/
 ENV/
 
-# IDE
+# IDE files
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS
+# OS files
 .DS_Store
 Thumbs.db
 
-# Project specific
-output/
-output_news/
+# Output directories (akan dibuat di GCS)
+text_output/
+final_output/
 log/
 *.log
+local_test_run.log
 
-# Credentials
-*.json
-!requirements.txt
+# Input data (dibaca dari GCS di cloud)
+link_input/
+whitelist_input/
+
+# Credentials (menggunakan Secret Manager di cloud)
 .env
 .env.local
+.env.example
+*.json
 
 # Testing
 .pytest_cache/
 .coverage
 htmlcov/
 
-# Input/Output files
-input/*.csv
-output/*.csv
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Documentation (tidak perlu di runtime)
+*.md
+DEPLOY_STEPS.md
+AI_PROVIDER_GUIDE.md
+CLOUD_RUN_JOB_DEPLOYMENT.md
+
+# Legacy deployment scripts (sudah ada di Makefile)
+build.sh
+deploy.sh
+
+# Makefile (tidak perlu di container)
+Makefile
+
+# Legacy files
+output/
+output_news/
+input/
+whitelist/
+parsed/
+main.py

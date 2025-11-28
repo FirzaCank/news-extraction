@@ -11,11 +11,12 @@ help:
 	@echo "  make run-local   - Run scraper locally and save log to local_test_run.log"
 	@echo "  make run-bg      - Run scraper in background with nohup (log/scraper.log)"
 	@echo ""
-	@echo "Docker & Deployment:"
-	@echo "  make build       - Build Docker image (platform linux/amd64)"
-	@echo "  make push        - Push Docker image to Artifact Registry"
-	@echo "  make deploy      - Deploy to Cloud Run Job"
+	@echo "Docker & Cloud Run Job Deployment:"
+	@echo "  make build-push  - Build and push Docker image to Artifact Registry"
+	@echo "  make deploy-job  - Deploy/Update Cloud Run Job"
 	@echo "  make all-deploy  - Build + Push + Deploy (all in one)"
+	@echo "  make execute-job - Execute the Cloud Run Job manually"
+	@echo "  make logs-job    - View Cloud Run Job logs"
 	@echo ""
 	@echo "Parsing (AI-powered):"
 	@echo "  make parse       - Parse latest output CSV (uses AI_PROVIDER from .env)"
@@ -23,10 +24,12 @@ help:
 	@echo "  make parse-gemini - Parse with Google Gemini (explicit override)"
 	@echo "  make parse-openai - Parse with OpenAI (explicit override)"
 	@echo ""
+	@echo "Full Pipeline:"
+	@echo "  make full-run    - Run complete pipeline: Scrape → Parse (auto)"
+	@echo "  make scrape-parse - Alias for full-run"
+	@echo ""
 	@echo "Utilities:"
 	@echo "  make clean       - Clean output files and logs"
-	@echo "  make logs        - View recent Cloud Run Job logs"
-	@echo "  make execute     - Execute Cloud Run Job"
 	@echo ""
 	@echo "=================================================="
 
@@ -48,19 +51,19 @@ run-local:
 		echo "   Please create .env file with DIFFBOT_TOKEN"; \
 		exit 1; \
 	fi
-	@if [ ! -f input/input.csv ]; then \
-		echo "❌ Error: input/input.csv not found!"; \
+	@if [ ! -f link_input/input.csv ]; then \
+		echo "❌ Error: link_input/input.csv not found!"; \
 		exit 1; \
 	fi
-	@echo "📂 Input: input/input.csv"
+	@echo "📂 Input: link_input/input.csv"
 	@echo "📝 Log: local_test_run.log"
 	@echo ""
 	@export $$(cat .env | grep -v '^\#' | xargs) && \
-		./venv/bin/python main.py 2>&1 | tee local_test_run.log
+		./venv/bin/python extract_news.py 2>&1 | tee local_test_run.log
 	@echo ""
 	@echo "✅ Test completed!"
 	@echo "📄 Log: local_test_run.log"
-	@echo "📁 Output: output/"
+	@echo "📁 Output: text_output/"
 
 # Run in background with nohup
 run-bg:
@@ -71,62 +74,51 @@ run-bg:
 		echo "❌ Error: .env file not found!"; \
 		exit 1; \
 	fi
-	@if [ ! -f input/input.csv ]; then \
-		echo "❌ Error: input/input.csv not found!"; \
+	@if [ ! -f link_input/input.csv ]; then \
+		echo "❌ Error: link_input/input.csv not found!"; \
 		exit 1; \
 	fi
 	@mkdir -p log
-	@echo "📂 Input: input/input.csv"
+	@echo "📂 Input: link_input/input.csv"
 	@echo "📝 Log: log/scraper.log"
 	@echo ""
 	@export $$(cat .env | grep -v '^\#' | xargs) && \
-		nohup env PYTHONUNBUFFERED=1 ./venv/bin/python main.py > log/scraper.log 2>&1 &
+		nohup env PYTHONUNBUFFERED=1 ./venv/bin/python extract_news.py > log/scraper.log 2>&1 &
 	@echo "✅ Scraper started in background!"
-	@echo "📊 Check status: ps aux | grep main.py"
+	@echo "📊 Check status: ps aux | grep extract_news.py"
 	@echo "📄 View log: tail -f log/scraper.log"
-	@echo "🛑 Stop: pkill -f main.py"
+	@echo "🛑 Stop: pkill -f extract_news.py"
 
-# Build Docker image
-build:
-	@echo "🔨 Building Docker image..."
-	docker build --platform linux/amd64 \
-		-t asia-southeast1-docker.pkg.dev/robotic-pact-466314-b3/scraping-docker-repo/news-extraction-scraper:latest .
-	@echo "✅ Build completed!"
+# Build and Push Docker image to Artifact Registry
+build-push:
+	@chmod +x build-and-push.sh
+	@./build-and-push.sh
 
-# Push to Artifact Registry
-push:
-	@echo "📤 Pushing to Artifact Registry..."
-	docker push asia-southeast1-docker.pkg.dev/robotic-pact-466314-b3/scraping-docker-repo/news-extraction-scraper:latest
-	@echo "✅ Push completed!"
+# Deploy Cloud Run Job
+deploy-job:
+	@chmod +x deploy-cloud-run-job.sh
+	@./deploy-cloud-run-job.sh
 
-# Deploy to Cloud Run Job
-deploy:
-	@echo "☁️  Deploying to Cloud Run Job..."
-	gcloud run jobs update news-extraction-scraper-job \
-		--image=asia-southeast1-docker.pkg.dev/robotic-pact-466314-b3/scraping-docker-repo/news-extraction-scraper:latest \
-		--region=asia-southeast1
-	@echo "✅ Deploy completed!"
-
-# Build + Push + Deploy
-all-deploy: build push deploy
+# Build + Push + Deploy (all in one)
+all-deploy: build-push deploy-job
 	@echo ""
 	@echo "=================================================="
 	@echo "✅ Full deployment completed!"
 	@echo "=================================================="
 
 # Execute Cloud Run Job
-execute:
-	@echo "🚀 Executing Cloud Run Job..."
-	gcloud run jobs execute news-extraction-scraper-job \
-		--region=asia-southeast1
+execute-job:
+	@chmod +x execute-job.sh
+	@./execute-job.sh
 
-# View logs
-logs:
+# View Cloud Run Job logs
+logs-job:
 	@echo "📋 Fetching recent Cloud Run Job logs..."
 	gcloud logging read \
-		"resource.type=cloud_run_job AND resource.labels.job_name=news-extraction-scraper-job" \
-		--limit 50 \
-		--project=robotic-pact-466314-b3
+		"resource.type=cloud_run_job AND resource.labels.job_name=news-extraction-and-parser-job" \
+		--limit 100 \
+		--project=robotic-pact-466314-b3 \
+		--format=json
 
 # Parse latest output CSV with AI (respects AI_PROVIDER from .env)
 parse:
@@ -177,11 +169,43 @@ parse-openai:
 		AI_PROVIDER=openai ./venv/bin/python parse_news.py 2>&1 | tee log/parser_openai.log
 	@echo "📄 Log saved to: log/parser_openai.log"
 
+# Full pipeline: Scrape → Parse
+full-run:
+	@echo "=================================================="
+	@echo "🚀 FULL PIPELINE: Scraping → Parsing"
+	@echo "=================================================="
+	@echo ""
+	@echo "Step 1: Running scraper..."
+	@echo "────────────────────────────────────────────────"
+	@if [ ! -f .env ]; then \
+		echo "❌ Error: .env file not found!"; \
+		exit 1; \
+	fi
+	@if [ ! -f link_input/input.csv ]; then \
+		echo "❌ Error: link_input/input.csv not found!"; \
+		exit 1; \
+	fi
+	@mkdir -p log
+	@export $$(cat .env | grep -v '^\#' | xargs) && \
+		(./venv/bin/python extract_news.py 2>&1 && echo "" && echo "Step 2: Running parser..." && echo "────────────────────────────────────────────────" && ./venv/bin/python parse_news.py 2>&1) | tee log/full_pipeline.log
+	@echo ""
+	@echo "=================================================="
+	@echo "✅ FULL PIPELINE COMPLETED!"
+	@echo "=================================================="
+	@echo "📄 Scraper output: text_output/text_output_extraction_*.csv"
+	@echo "📄 Parser output: final_output/final_output_parsed_*.csv"
+	@echo "📄 Log: log/full_pipeline.log"
+	@echo ""
+
+# Alias for full-run
+scrape-parse: full-run
+
 # Clean output and logs
 clean:
 	@echo "🧹 Cleaning output files and logs..."
-	rm -rf output/*.csv
-	rm -rf parsed/*.csv
+	rm -rf text_output/text_output_extraction_*.csv
+	rm -rf final_output/final_output_parsed_*.csv
 	rm -f local_test_run.log
 	rm -f log/parser*.log
+	rm -f log/full_pipeline.log
 	@echo "✅ Clean completed!"
