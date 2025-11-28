@@ -44,8 +44,8 @@ gcloud run jobs deploy ${JOB_NAME} \
     --region=${REGION} \
     --service-account=${SERVICE_ACCOUNT} \
     --set-env-vars="GCS_BUCKET_NAME=${GCS_BUCKET}" \
-    --set-env-vars="GCS_INPUT_PATH=link_input/input.csv" \
-    --set-env-vars="GCS_OUTPUT_PATH=text_output" \
+    --set-env-vars="GCS_INPUT_PATH=text_output" \
+    --set-env-vars="GCS_OUTPUT_PATH=final_output" \
     --set-env-vars="AI_PROVIDER=gemini" \
     --set-env-vars="GEMINI_MODEL=gemini-2.0-flash-exp" \
     --set-env-vars="AI_TEMPERATURE=0.1" \
