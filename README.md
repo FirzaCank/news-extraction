@@ -309,19 +309,23 @@ CSV file dengan kolom:
 
 ### Parser Output (`parsed/parsed_*.csv`)
 
-CSV file dengan kolom:
+CSV file dengan kolom (1 quote per row):
 - `id`: Article ID
 - `date`: Article date
 - `source`: Article URL
-- `quotes`: JSON array of extracted quotes - `["quote1", "quote2"]`
-- `speakers`: JSON array of speakers (1:1 mapped) - `["speaker1", "speaker2"]`
-- `province`: Detected province or empty - `"DKI Jakarta"`
-- `city`: Detected city or empty - `"Jakarta"`
+- `quote`: Single extracted quote
+- `speaker`: Speaker for this quote
+- `province`: Detected or inferred province - `"Sumatera Utara"`
+- `city`: Detected city/regency - `"Asahan"`
 
-Example row:
+**Important**: Each quote creates a separate row. Article dengan 3 quotes = 3 rows.
+
+Example:
 ```csv
-id,date,source,quotes,speakers,province,city
-91605609591,2024-11-26,https://example.com/article,"[\"Harga minyak goreng masih tinggi\",\"Kami terus monitor\"]","[\"Kepala BPS\",\"Menteri\"]","DKI Jakarta","Jakarta"
+id,date,source,quote,speaker,province,city
+91605609591,2024-11-26,https://example.com/article,"Harga minyak goreng masih tinggi","Kepala BPS","DKI Jakarta","Jakarta"
+91605609591,2024-11-26,https://example.com/article,"Kami terus monitor","Menteri","DKI Jakarta","Jakarta"
+91607975102,2024-11-26,https://example.com/article2,"Quote dari Asahan","Sekda","Sumatera Utara","Asahan"
 ```
 
 ## Configuration
