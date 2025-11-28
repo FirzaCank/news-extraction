@@ -12,6 +12,8 @@ import sys
 import time
 from datetime import datetime
 from google.cloud import secretmanager
+from google.cloud import storage
+import io
 
 # ============================================================================
 # SECRET MANAGER UTILITIES
@@ -33,6 +35,92 @@ def get_secret(secret_id, project_id="robotic-pact-466314-b3", version="latest")
             print(f"✅ Using '{secret_id}' from environment variable")
             return env_value
         print(f"⚠️  Could not retrieve '{secret_id}': {str(e)}")
+        return None
+
+# ============================================================================
+# GCS UTILITIES
+# ============================================================================
+def get_gcs_client():
+    """Initialize GCS client"""
+    try:
+        return storage.Client()
+    except Exception as e:
+        print(f"⚠️  Warning: Could not initialize GCS client: {str(e)}")
+        return None
+
+def get_latest_file_from_gcs(bucket_name, folder_path):
+    """Get the latest file from GCS folder"""
+    try:
+        client = get_gcs_client()
+        if not client:
+            return None, None
+        
+        bucket = client.bucket(bucket_name)
+        blobs = list(bucket.list_blobs(prefix=f"{folder_path}/"))
+        
+        # Filter only CSV files
+        csv_blobs = [b for b in blobs if b.name.endswith('.csv') and not b.name.endswith('/')]
+        
+        if not csv_blobs:
+            print(f"❌ No CSV files found in gs://{bucket_name}/{folder_path}/")
+            return None, None
+        
+        # Sort by updated time descending
+        csv_blobs.sort(key=lambda x: x.updated, reverse=True)
+        latest_blob = csv_blobs[0]
+        latest_filename = latest_blob.name.split('/')[-1]
+        
+        print(f"📄 Found {len(csv_blobs)} file(s) in GCS")
+        print(f"📌 Latest file: {latest_filename}")
+        
+        return latest_blob, latest_filename
+        
+    except Exception as e:
+        print(f"❌ Error finding latest file in GCS: {str(e)}")
+        return None, None
+
+def download_from_gcs(bucket_name, folder_path):
+    """Download latest CSV from GCS to local"""
+    try:
+        latest_blob, latest_filename = get_latest_file_from_gcs(bucket_name, folder_path)
+        
+        if not latest_blob:
+            return None
+        
+        # Create local directory
+        os.makedirs(INPUT_DIR, exist_ok=True)
+        
+        # Download to local
+        local_path = os.path.join(INPUT_DIR, latest_filename)
+        latest_blob.download_to_filename(local_path)
+        
+        print(f"✅ Downloaded from GCS: {latest_filename}")
+        return local_path
+        
+    except Exception as e:
+        print(f"❌ Error downloading from GCS: {str(e)}")
+        return None
+
+def upload_to_gcs(local_file, bucket_name, folder_path):
+    """Upload file to GCS"""
+    try:
+        client = get_gcs_client()
+        if not client:
+            return None
+        
+        bucket = client.bucket(bucket_name)
+        filename = os.path.basename(local_file)
+        blob_path = f"{folder_path}/{filename}"
+        blob = bucket.blob(blob_path)
+        
+        blob.upload_from_filename(local_file)
+        
+        gcs_uri = f"gs://{bucket_name}/{blob_path}"
+        print(f"✅ Uploaded to GCS: {gcs_uri}")
+        return gcs_uri
+        
+    except Exception as e:
+        print(f"❌ Error uploading to GCS: {str(e)}")
         return None
 
 # ============================================================================
@@ -81,13 +169,21 @@ MAX_CONTENT_LENGTH = int(os.environ.get("AI_MAX_CONTENT", "6000"))
 DELAY_BETWEEN_REQUESTS = int(os.environ.get("AI_DELAY", "1"))
 
 # File paths
-INPUT_DIR = "output"
-OUTPUT_DIR = "parsed"
+INPUT_DIR = "text_output"
+OUTPUT_DIR = "final_output"
+WHITELIST_FILE = "whitelist_input"
+
+# GCS Configuration
+LOCAL_MODE = os.environ.get("LOCAL_MODE", "false").lower() == "true"
+GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "asia-southeast1-v2-news-extraction-plus-parser-data")
+GCS_INPUT_PATH = os.environ.get("GCS_INPUT_PATH", "text_output")
+GCS_OUTPUT_PATH = os.environ.get("GCS_OUTPUT_PATH", "final_output")
 
 # ============================================================================
 # EXTRACTION PROMPT
 # ============================================================================
-EXTRACTION_PROMPT = """Kamu adalah asisten AI yang ahli dalam menganalisis berita berbahasa Indonesia.
+EXTRACTION_PROMPT = """Kamu adalah asisten AI yang ahli dalam menganalisis berita berbahasa Indonesia ataupun bahasa inggris.
+Setara dengan professor ahli linguistik bahasa indonesia dan bahasa inggris.
 
 Tugas kamu: Extract informasi terstruktur dari artikel berita berikut.
 
@@ -96,21 +192,33 @@ ARTIKEL:
 
 INSTRUKSI:
 1. Extract semua KUTIPAN/QUOTE yang ada (biasanya dalam tanda kutip "...")
-2. Identifikasi SIAPA yang mengucapkan setiap kutipan (nama orang/jabatan)
-3. Extract PROVINSI jika disebutkan dalam berita (contoh: Jawa Tengah, DKI Jakarta)
-4. Extract KOTA/KABUPATEN jika disebutkan (contoh: Semarang, Jakarta, Surabaya)
+2. Identifikasi SIAPA yang mengucapkan setiap kutipan:
+   - Gunakan NAMA PERSIS seperti yang disebutkan di artikel (short form)
+   - Contoh: "ujar Amalia" → speaker: "Amalia" (BUKAN full name)
+   - Contoh: "kata Zainal" → speaker: "Zainal"
+   - Contoh: "menurut Sekda" → speaker: "Sekda"
+   - PENTING: Jika quote hanya diikuti kata sambung seperti "tegasnya", "katanya", "ungkapnya", "ujarnya", "tambahnya" TANPA nama:
+     * Cek kalimat/paragraf SEBELUMNYA untuk mencari nama pembicara terdekat
+     * Gunakan nama pembicara yang paling dekat disebutkan sebelum quote tersebut
+     * Contoh: Paragraf 1: "...kata Zainal Arifin..." → Paragraf 2: "Kemerdekaan harus dijaga, tegasnya." → speaker: "Zainal Arifin"
+3. Extract KOTA/KABUPATEN jika disebutkan (contoh: Semarang, Jakarta, Surabaya, Asahan)
+4. Extract PROVINSI:
+   - Jika provinsi disebutkan eksplisit, gunakan itu (contoh: Jawa Tengah, DKI Jakarta)
+   - Jika TIDAK disebutkan tapi ada kota/kabupaten, INFER provinsinya
+   - Contoh: Asahan → Sumatera Utara, Semarang → Jawa Tengah, Jakarta → DKI Jakarta
 
 RULES:
-- Quotes dan speakers harus 1:1 mapping (urutan sama)
-- Hanya extract informasi yang EKSPLISIT disebutkan, jangan menebak
+- Quotes dan speakers harus 1:1 mapping (urutan sama) - SETIAP quote HARUS punya speaker
+- Extract informasi yang EKSPLISIT disebutkan
+- Untuk provinsi: boleh infer dari nama kota/kabupaten jika tidak disebutkan
 - Jika tidak ada, gunakan empty array [] untuk quotes/speakers atau null untuk province/city
 - Keep quotes concise, maksimal 3-5 quotes terpenting saja
 - Extract only the MOST RELEVANT quotes, bukan semua
 
 OUTPUT FORMAT (JSON only, no explanation, no markdown):
 {{
-  "quotes": ["kutipan 1", "kutipan 2"],
-  "speakers": ["nama speaker 1", "nama speaker 2"],
+  "quotes": ["kutipan"],
+  "speakers": ["nama speaker"],
   "province": "nama provinsi atau null",
   "city": "nama kota atau null"
 }}
@@ -330,6 +438,94 @@ def _empty_result() -> dict:
     }
 
 # ============================================================================
+# WHITELIST MAPPING
+# ============================================================================
+def load_whitelist() -> list:
+    """Load latest whitelist CSV from whitelist folder or GCS"""
+    whitelist = []
+    whitelist_path = None
+    
+    # Cloud mode: download from GCS
+    if not LOCAL_MODE:
+        try:
+            client = get_gcs_client()
+            if client:
+                bucket = client.bucket(GCS_BUCKET_NAME)
+                blobs = list(bucket.list_blobs(prefix="whitelist_input/"))
+                csv_blobs = [b for b in blobs if b.name.endswith('.csv')]
+                
+                if csv_blobs:
+                    # Get latest whitelist
+                    csv_blobs.sort(key=lambda x: x.updated, reverse=True)
+                    latest_blob = csv_blobs[0]
+                    filename = latest_blob.name.split('/')[-1]
+                    
+                    # Download to local temp
+                    os.makedirs(WHITELIST_FILE, exist_ok=True)
+                    whitelist_path = os.path.join(WHITELIST_FILE, filename)
+                    latest_blob.download_to_filename(whitelist_path)
+                    print(f"📋 Using whitelist from GCS: {filename}")
+        except Exception as e:
+            print(f"⚠️  Could not load whitelist from GCS: {str(e)}")
+    
+    # Local mode or GCS fallback
+    if not whitelist_path:
+        if not os.path.exists(WHITELIST_FILE):
+            print(f"⚠️  Whitelist directory not found: {WHITELIST_FILE}")
+            return whitelist
+        
+        # Find latest CSV file in whitelist folder
+        csv_files = [f for f in os.listdir(WHITELIST_FILE) if f.endswith('.csv')]
+        if not csv_files:
+            print(f"⚠️  No CSV files found in '{WHITELIST_FILE}'")
+            return whitelist
+        
+        # Get most recent file
+        csv_files.sort(reverse=True)
+        whitelist_path = os.path.join(WHITELIST_FILE, csv_files[0])
+        print(f"📋 Using whitelist: {csv_files[0]}")
+    
+    try:
+        with open(whitelist_path, 'r', encoding='utf-8-sig') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                whitelist.append({
+                    'fullname': row.get('nama', '').strip(),
+                    'jabatan': row.get('jabatan', '').strip(),
+                    'category': row.get('category', '').strip(),
+                    'alias': row.get('alias', '').strip().lower()
+                })
+        
+        print(f"✅ Loaded {len(whitelist)} entries from whitelist")
+        return whitelist
+    
+    except Exception as e:
+        print(f"⚠️  Error loading whitelist: {str(e)}")
+        return whitelist
+
+
+def match_speaker(spoke_person: str, whitelist: list) -> dict:
+    """Match spoke_person with whitelist using fuzzy matching on alias"""
+    if not spoke_person or not whitelist:
+        return {'fullname': '', 'jabatan': '', 'category': '', 'alias': ''}
+    
+    spoke_lower = spoke_person.lower().strip()
+    
+    # Try exact match first
+    for entry in whitelist:
+        if entry['alias'] and entry['alias'] in spoke_lower:
+            return entry
+    
+    # Try partial match (spoke_person contains alias)
+    for entry in whitelist:
+        if entry['alias'] and spoke_lower in entry['alias']:
+            return entry
+    
+    # No match found
+    return {'fullname': '', 'jabatan': '', 'category': '', 'alias': ''}
+
+
+# ============================================================================
 # CSV PROCESSING
 # ============================================================================
 def read_input_csv(file_path: str) -> list:
@@ -356,16 +552,16 @@ def read_input_csv(file_path: str) -> list:
         return []
 
 
-def save_parsed_csv(results: list, input_filename: str):
-    """Save parsed results to CSV"""
+def save_parsed_csv(results: list, input_filename: str, whitelist: list):
+    """Save parsed results to CSV - 1 quote per row with whitelist mapping"""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     # Generate output filename
     if input_filename.startswith('output_'):
-        output_filename = input_filename.replace('output_', 'parsed_', 1)
+        output_filename = input_filename.replace('output_', 'final_output_', 1)
     else:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_filename = f"parsed_{timestamp}.csv"
+        output_filename = f"final_output_{timestamp}.csv"
     
     output_path = os.path.join(OUTPUT_DIR, output_filename)
     
@@ -373,23 +569,53 @@ def save_parsed_csv(results: list, input_filename: str):
         with open(output_path, 'w', newline='', encoding='utf-8') as f:
             fieldnames = [
                 'id', 'date', 'source', 
-                'quotes', 'speakers', 
-                'province', 'city'
+                'quote', 'spoke_person', 
+                'province', 'city',
+                'jabatan', 'category', 'alias', 'fullname'
             ]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             
             for result in results:
-                # Convert lists to JSON strings for CSV
-                writer.writerow({
-                    'id': result['id'],
-                    'date': result['date'],
-                    'source': result['source'],
-                    'quotes': json.dumps(result['quotes'], ensure_ascii=False),
-                    'speakers': json.dumps(result['speakers'], ensure_ascii=False),
-                    'province': result['province'] or '',
-                    'city': result['city'] or ''
-                })
+                quotes = result['quotes']
+                speakers = result['speakers']
+                
+                # If no quotes, write one row with empty quote/speaker
+                if not quotes:
+                    writer.writerow({
+                        'id': result['id'],
+                        'date': result['date'],
+                        'source': result['source'],
+                        'quote': '',
+                        'spoke_person': '',
+                        'province': result['province'] or '',
+                        'city': result['city'] or '',
+                        'jabatan': '',
+                        'category': '',
+                        'alias': '',
+                        'fullname': ''
+                    })
+                else:
+                    # Write one row per quote
+                    for i, quote in enumerate(quotes):
+                        spoke_person = speakers[i] if i < len(speakers) else ''
+                        
+                        # Match with whitelist
+                        match = match_speaker(spoke_person, whitelist)
+                        
+                        writer.writerow({
+                            'id': result['id'],
+                            'date': result['date'],
+                            'source': result['source'],
+                            'quote': quote,
+                            'spoke_person': spoke_person,
+                            'province': result['province'] or '',
+                            'city': result['city'] or '',
+                            'jabatan': match['jabatan'],
+                            'category': match['category'],
+                            'alias': match['alias'],
+                            'fullname': match['fullname']
+                        })
         
         print(f"✅ Saved parsed results to: {output_path}")
         return output_path
@@ -489,25 +715,37 @@ def print_statistics(results: list):
 def main():
     """Main execution function"""
     if len(sys.argv) < 2:
-        # Find latest output file
-        if not os.path.exists(INPUT_DIR):
-            print(f"❌ Input directory '{INPUT_DIR}' not found!")
-            sys.exit(1)
-        
-        csv_files = [f for f in os.listdir(INPUT_DIR) if f.endswith('.csv')]
-        if not csv_files:
-            print(f"❌ No CSV files found in '{INPUT_DIR}'")
-            sys.exit(1)
-        
-        # Get most recent file
-        csv_files.sort(reverse=True)
-        input_file = os.path.join(INPUT_DIR, csv_files[0])
-        print(f"📄 Using latest file: {csv_files[0]}")
+        # Cloud mode: download from GCS
+        if not LOCAL_MODE:
+            print(f"☁️  Cloud mode: Reading from gs://{GCS_BUCKET_NAME}/{GCS_INPUT_PATH}/")
+            input_file = download_from_gcs(GCS_BUCKET_NAME, GCS_INPUT_PATH)
+            if not input_file:
+                print("❌ Failed to download from GCS!")
+                sys.exit(1)
+        else:
+            # Local mode: read from local directory
+            print(f"🏠 Local mode: Reading from {INPUT_DIR}/")
+            if not os.path.exists(INPUT_DIR):
+                print(f"❌ Input directory '{INPUT_DIR}' not found!")
+                sys.exit(1)
+            
+            csv_files = [f for f in os.listdir(INPUT_DIR) if f.endswith('.csv')]
+            if not csv_files:
+                print(f"❌ No CSV files found in '{INPUT_DIR}'")
+                sys.exit(1)
+            
+            # Get most recent file
+            csv_files.sort(reverse=True)
+            input_file = os.path.join(INPUT_DIR, csv_files[0])
+            print(f"📄 Using latest file: {csv_files[0]}")
     else:
         input_file = sys.argv[1]
         if not os.path.exists(input_file):
             print(f"❌ File not found: {input_file}")
             sys.exit(1)
+    
+    # Load whitelist
+    whitelist = load_whitelist()
     
     # Read input
     articles = read_input_csv(input_file)
@@ -518,14 +756,24 @@ def main():
     # Parse with AI
     results = batch_parse(articles)
     
-    # Save output
+    # Save output with whitelist mapping
     input_filename = os.path.basename(input_file)
-    output_path = save_parsed_csv(results, input_filename)
+    output_path = save_parsed_csv(results, input_filename, whitelist)
     
     if output_path:
-        # Print statistics
-        print_statistics(results)
-        print(f"\n✨ Done! Output: {output_path}")
+        # Upload to GCS if in cloud mode
+        if not LOCAL_MODE:
+            gcs_uri = upload_to_gcs(output_path, GCS_BUCKET_NAME, GCS_OUTPUT_PATH)
+            if gcs_uri:
+                print_statistics(results)
+                print(f"\n✨ Done! Output: {gcs_uri}")
+            else:
+                print("\n⚠️  Local output saved but GCS upload failed")
+                print(f"   Local file: {output_path}")
+        else:
+            # Print statistics
+            print_statistics(results)
+            print(f"\n✨ Done! Output: {output_path}")
     else:
         print("\n❌ Failed to save output")
         sys.exit(1)
