@@ -47,7 +47,7 @@ gcloud run jobs deploy ${JOB_NAME} \
     --set-env-vars="GCS_INPUT_PATH=text_output" \
     --set-env-vars="GCS_OUTPUT_PATH=final_output" \
     --set-env-vars="AI_PROVIDER=gemini" \
-    --set-env-vars="GEMINI_MODEL=gemini-2.0-flash-exp" \
+    --set-env-vars="GEMINI_MODEL=gemini-2.5-flash" \
     --set-env-vars="AI_TEMPERATURE=0.1" \
     --set-env-vars="AI_MAX_CONTENT=6000" \
     --set-env-vars="AI_DELAY=1" \
@@ -59,7 +59,7 @@ gcloud run jobs deploy ${JOB_NAME} \
     --set-env-vars="LOCAL_MODE=false" \
     --set-secrets="DIFFBOT_TOKEN=diffbot-key:latest" \
     --set-secrets="GEMINI_API_KEY=gemini-api-key:latest" \
-    --max-retries=2 \
+    --max-retries=0 \
     --task-timeout=3600 \
     --memory=2Gi \
     --cpu=2 \
