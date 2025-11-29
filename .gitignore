@@ -39,6 +39,7 @@ Thumbs.db
 # Credentials & Environment
 .env
 .env.local
+*.zip
 *.json
 !requirements.txt
 
