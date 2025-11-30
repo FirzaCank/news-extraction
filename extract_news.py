@@ -81,7 +81,7 @@ def get_gcs_client():
         return None
 
 def get_latest_input_file(bucket_name, input_folder='link_input'):
-    """Get the latest input file from GCS based on last_modified time"""
+    """Get the latest input file from GCS based on creation or modification time"""
     try:
         client = get_gcs_client()
         if not client:
@@ -90,27 +90,67 @@ def get_latest_input_file(bucket_name, input_folder='link_input'):
         
         bucket = client.bucket(bucket_name)
         
-        # List all files in input folder with prefix 'input_'
-        blobs = list(bucket.list_blobs(prefix=f"{input_folder}/input_"))
+        # List all blobs in input folder
+        blobs = list(bucket.list_blobs(prefix=f"{input_folder}/"))
         
-        if not blobs:
-            print(f"❌ No input files found in gs://{bucket_name}/{input_folder}/")
+        print(f"\n🔍 Debug: Found {len(blobs)} total blobs in {input_folder}/")
+        
+        # Filter only CSV files (exclude directories and hidden files)
+        csv_blobs = []
+        for blob in blobs:
+            filename = blob.name.split('/')[-1]
+            print(f"   Checking: {blob.name}")
+            
+            # Skip directories (end with /)
+            if blob.name.endswith('/'):
+                print(f"      ⏭️  Skipped (directory)")
+                continue
+            
+            # Skip hidden files (.keep, .gitkeep, etc)
+            if filename.startswith('.'):
+                print(f"      ⏭️  Skipped (hidden file)")
+                continue
+            
+            # Must be CSV
+            if not filename.endswith('.csv'):
+                print(f"      ⏭️  Skipped (not CSV)")
+                continue
+            
+            csv_blobs.append(blob)
+            print(f"      ✅ Added to list")
+        
+        if not csv_blobs:
+            print(f"❌ No CSV files found in gs://{bucket_name}/{input_folder}/")
             return None, None
         
-        # Sort by updated time (last_modified) descending
-        blobs.sort(key=lambda x: x.updated, reverse=True)
+        print(f"\n📊 Valid CSV files found: {len(csv_blobs)}")
         
-        latest_blob = blobs[0]
-        latest_filename = latest_blob.name.split('/')[-1]  # Get filename only
+        # Show all files with timestamps
+        for blob in csv_blobs:
+            latest_time = max(blob.time_created, blob.updated)
+            print(f"\n   📄 {blob.name.split('/')[-1]}")
+            print(f"      Created: {blob.time_created}")
+            print(f"      Updated: {blob.updated}")
+            print(f"      Latest:  {latest_time}")
         
-        print(f"📂 Found {len(blobs)} input file(s) in GCS")
-        print(f"📌 Latest file: {latest_filename}")
-        print(f"   Last modified: {latest_blob.updated}")
+        # Sort by latest timestamp (max of created or updated) descending
+        csv_blobs.sort(key=lambda x: max(x.time_created, x.updated), reverse=True)
+        
+        latest_blob = csv_blobs[0]
+        latest_filename = latest_blob.name.split('/')[-1]
+        latest_time = max(latest_blob.time_created, latest_blob.updated)
+        
+        print(f"\n📌 SELECTED FILE: {latest_filename}")
+        print(f"📅 Latest timestamp: {latest_time}")
+        print(f"   - Created: {latest_blob.time_created}")
+        print(f"   - Updated: {latest_blob.updated}")
         
         return latest_blob, latest_filename
         
     except Exception as e:
         print(f"❌ Error finding latest input file: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None, None
 
 def read_input_from_gcs(bucket_name, input_folder='link_input'):

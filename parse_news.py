@@ -48,6 +48,7 @@ def get_gcs_client():
         print(f"⚠️  Warning: Could not initialize GCS client: {str(e)}")
         return None
 
+            
 def get_latest_file_from_gcs(bucket_name, folder_path):
     """Get the latest file from GCS folder"""
     try:
@@ -66,12 +67,17 @@ def get_latest_file_from_gcs(bucket_name, folder_path):
             return None, None
         
         # Sort by updated time descending
-        csv_blobs.sort(key=lambda x: x.updated, reverse=True)
+        csv_blobs.sort(key=lambda x: max(x.time_created, x.updated), reverse=True)
         latest_blob = csv_blobs[0]
         latest_filename = latest_blob.name.split('/')[-1]
+
+        latest_time = max(latest_blob.time_created, latest_blob.updated)
         
         print(f"📄 Found {len(csv_blobs)} file(s) in GCS")
         print(f"📌 Latest file: {latest_filename}")
+        print(f"📅 Latest timestamp: {latest_time}")
+        print(f"   - Created: {latest_blob.time_created}")
+        print(f"   - Updated: {latest_blob.updated}")
         
         return latest_blob, latest_filename
         
@@ -513,8 +519,14 @@ def match_speaker(spoke_person: str, whitelist: list) -> dict:
     
     # Try exact match first
     for entry in whitelist:
-        if entry['alias'] and entry['alias'] in spoke_lower:
-            return entry
+        aliases = [a.strip() for a in entry['alias'].split(',')] if entry['alias'] else []
+        for alias in aliases:
+            if alias and alias in spoke_lower:
+                return entry
+            if alias and spoke_lower in alias:
+                return entry
+        # if entry['alias'] and entry['alias'] in spoke_lower:
+        #     return entry
     
     # Try partial match (spoke_person contains alias)
     for entry in whitelist:
