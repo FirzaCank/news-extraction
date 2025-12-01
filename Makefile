@@ -18,6 +18,13 @@ help:
 	@echo "  make execute-job - Execute the Cloud Run Job manually"
 	@echo "  make logs-job    - View Cloud Run Job logs"
 	@echo ""
+	@echo "Parse-Only Job (Self Content):"
+	@echo "  make build-push-parse-only  - Build and push Parse-Only Docker image"
+	@echo "  make deploy-parse-only      - Deploy/Update Parse-Only Cloud Run Job"
+	@echo "  make all-deploy-parse-only  - Build + Push + Deploy Parse-Only (all in one)"
+	@echo "  make execute-parse-only     - Execute Parse-Only Job manually"
+	@echo "  make logs-parse-only        - View Parse-Only Job logs"
+	@echo ""
 	@echo "Parsing (AI-powered):"
 	@echo "  make parse       - Parse latest output CSV (uses AI_PROVIDER from .env)"
 	@echo "  make parse-file  - Parse specific file: make parse-file FILE=output/file.csv"
@@ -106,16 +113,47 @@ all-deploy: build-push deploy-job
 	@echo "✅ Full deployment completed!"
 	@echo "=================================================="
 
+# Build and Push Parse-Only Docker image
+build-push-parse-only:
+	@chmod +x build-and-push-parse-only.sh
+	@./build-and-push-parse-only.sh
+
+# Deploy Parse-Only Cloud Run Job
+deploy-parse-only:
+	@chmod +x deploy-parse-only-job.sh
+	@./deploy-parse-only-job.sh
+
+# Build + Push + Deploy Parse-Only (all in one)
+all-deploy-parse-only: build-push-parse-only deploy-parse-only
+	@echo ""
+	@echo "=================================================="
+	@echo "✅ Parse-Only deployment completed!"
+	@echo "=================================================="
+
 # Execute Cloud Run Job
 execute-job:
 	@chmod +x execute-job.sh
 	@./execute-job.sh
+
+# Execute Parse-Only Cloud Run Job
+execute-parse-only:
+	@chmod +x execute-parse-only-job.sh
+	@./execute-parse-only-job.sh
 
 # View Cloud Run Job logs
 logs-job:
 	@echo "📋 Fetching recent Cloud Run Job logs..."
 	gcloud logging read \
 		"resource.type=cloud_run_job AND resource.labels.job_name=news-extraction-and-parser-job" \
+		--limit 100 \
+		--project=robotic-pact-466314-b3 \
+		--format=json
+
+# View Parse-Only Cloud Run Job logs
+logs-parse-only:
+	@echo "📋 Fetching recent Parse-Only Job logs..."
+	gcloud logging read \
+		"resource.type=cloud_run_job AND resource.labels.job_name=self-content-parser-job" \
 		--limit 100 \
 		--project=robotic-pact-466314-b3 \
 		--format=json

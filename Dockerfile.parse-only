@@ -1,0 +1,30 @@
+# Dockerfile for Self Content Parser (Parse-Only Cloud Run Job)
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy parse scripts
+COPY parse_news.py .
+COPY parse_self_content.py .
+
+# Create necessary directories
+RUN mkdir -p /app/self_content_input /app/final_output /app/whitelist_input /app/log
+
+# Create non-root user
+RUN adduser --disabled-password --gecos '' --shell /bin/bash appuser \
+    && chown -R appuser:appuser /app
+
+USER appuser
+
+# Run parse_self_content.py directly
+CMD ["python", "parse_self_content.py"]
