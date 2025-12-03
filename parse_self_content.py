@@ -163,7 +163,9 @@ elif AI_PROVIDER == "openai":
 
 TEMPERATURE = float(os.environ.get("AI_TEMPERATURE", "0.1"))
 MAX_CONTENT_LENGTH = int(os.environ.get("AI_MAX_CONTENT", "6000"))
-DELAY_BETWEEN_REQUESTS = int(os.environ.get("AI_DELAY", "1"))
+DELAY_BETWEEN_REQUESTS = float(os.environ.get("AI_DELAY", "1"))
+AI_TIMEOUT = int(os.environ.get("AI_TIMEOUT", "60"))
+AI_MAX_RETRIES = int(os.environ.get("AI_MAX_RETRIES", "3"))
 
 OUTPUT_DIR = "final_output"
 WHITELIST_DIR = "whitelist_input"
@@ -219,13 +221,106 @@ OUTPUT FORMAT (JSON only, no explanation, no markdown):
 
 Respond ONLY dengan valid JSON, tidak ada teks lain."""
 
-# Import AI extraction functions from parse_news (reuse logic)
+# Import only helper functions from parse_news
 from parse_news import (
-    extract_info_with_ai,
     load_whitelist,
     match_speaker,
-    print_statistics
+    print_statistics,
+    _extract_with_gemini,
+    _extract_with_openai
 )
+
+# ============================================================================
+# AI EXTRACTION WITH TIMEOUT
+# ============================================================================
+def extract_info_with_ai(content: str, max_retries: int = None, timeout: int = None) -> dict:
+    """
+    Extract information using configured AI provider with timeout and better error handling
+    
+    Args:
+        content: The news article text
+        max_retries: Maximum retry attempts (uses AI_MAX_RETRIES env if None)
+        timeout: Maximum time in seconds for one article (uses AI_TIMEOUT env if None)
+    
+    Returns:
+        Dictionary with extracted info or error indicator
+    """
+    import signal
+    from datetime import datetime
+    
+    # Use env defaults if not provided
+    if max_retries is None:
+        max_retries = AI_MAX_RETRIES
+    if timeout is None:
+        timeout = AI_TIMEOUT
+    
+    def timeout_handler(signum, frame):
+        raise TimeoutError("AI extraction timeout")
+    
+    start_time = datetime.now()
+    
+    for attempt in range(max_retries):
+        # Set timeout alarm (only works on Unix-like systems)
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(timeout)
+        
+        try:
+            if attempt > 0:
+                print(f"      🔄 Retry attempt {attempt + 1}/{max_retries}")
+                time.sleep(2)  # Small delay before retry
+            
+            if AI_PROVIDER == "gemini":
+                result = _extract_with_gemini(content, max_retries=1)  # No nested retries
+            else:
+                result = _extract_with_openai(content, max_retries=1)
+            
+            signal.alarm(0)  # Cancel alarm
+            elapsed = (datetime.now() - start_time).total_seconds()
+            print(f"      ⏱️  Completed in {elapsed:.1f}s")
+            return result
+            
+        except TimeoutError:
+            signal.alarm(0)  # Cancel alarm
+            elapsed = (datetime.now() - start_time).total_seconds()
+            
+            if attempt < max_retries - 1:
+                print(f"      ⏱️  Timeout after {timeout}s (attempt {attempt + 1}) - retrying...")
+                continue
+            else:
+                print(f"      ⏱️  Final timeout after {elapsed:.1f}s total - skipping")
+                return {
+                    'quotes': [],
+                    'speakers': [],
+                    'province': 'ERROR TIMEOUT',
+                    'city': 'ERROR TIMEOUT',
+                    'error': 'timeout'
+                }
+                
+        except Exception as e:
+            signal.alarm(0)  # Cancel alarm
+            error_msg = str(e)[:100]
+            
+            if attempt < max_retries - 1:
+                print(f"      ❌ Error: {error_msg} - retrying...")
+                continue
+            else:
+                print(f"      ❌ Final error: {error_msg}")
+                return {
+                    'quotes': [],
+                    'speakers': [],
+                    'province': 'ERROR',
+                    'city': 'ERROR',
+                    'error': 'exception'
+                }
+    
+    # Should not reach here
+    return {
+        'quotes': [],
+        'speakers': [],
+        'province': 'ERROR',
+        'city': 'ERROR',
+        'error': 'unknown'
+    }
 
 # ============================================================================
 # CSV PROCESSING
@@ -276,7 +371,22 @@ def save_parsed_csv(results: list, input_filename: str, whitelist: list):
                 quotes = result['quotes']
                 speakers = result['speakers']
                 
-                if not quotes:
+                # Check if timeout error
+                if result.get('error') == 'timeout':
+                    writer.writerow({
+                        'id': result['id'],
+                        'date': result['date'],
+                        'source': result['source'],
+                        'quote': 'ERROR TIMEOUT',
+                        'spoke_person': 'ERROR TIMEOUT',
+                        'province': 'ERROR TIMEOUT',
+                        'city': 'ERROR TIMEOUT',
+                        'jabatan': '',
+                        'category': '',
+                        'alias': '',
+                        'fullname': ''
+                    })
+                elif not quotes:
                     writer.writerow({
                         'id': result['id'],
                         'date': result['date'],
@@ -341,7 +451,7 @@ def batch_parse(articles: list) -> list:
             continue
         
         print(f"   🔍 Extracting with {AI_PROVIDER.upper()}...")
-        extracted = extract_info_with_ai(article['content'])
+        extracted = extract_info_with_ai(article['content'], timeout=60)
         
         result = {
             'id': article['id'],
@@ -350,15 +460,19 @@ def batch_parse(articles: list) -> list:
             'quotes': extracted['quotes'],
             'speakers': extracted['speakers'],
             'province': extracted['province'],
-            'city': extracted['city']
+            'city': extracted['city'],
+            'error': extracted.get('error', '')
         }
         
         results.append(result)
         
-        print(f"   ✅ Found: {len(extracted['quotes'])} quotes, "
-              f"{len(extracted['speakers'])} speakers, "
-              f"Province: {extracted['province'] or 'N/A'}, "
-              f"City: {extracted['city'] or 'N/A'}")
+        if extracted.get('error') == 'timeout':
+            print(f"   ⏱️  TIMEOUT - Skipped after 60s")
+        else:
+            print(f"   ✅ Found: {len(extracted['quotes'])} quotes, "
+                  f"{len(extracted['speakers'])} speakers, "
+                  f"Province: {extracted['province'] or 'N/A'}, "
+                  f"City: {extracted['city'] or 'N/A'}")
         
         if i < total:
             time.sleep(DELAY_BETWEEN_REQUESTS)

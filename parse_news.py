@@ -172,7 +172,9 @@ elif AI_PROVIDER == "openai":
 # Model settings
 TEMPERATURE = float(os.environ.get("AI_TEMPERATURE", "0.1"))
 MAX_CONTENT_LENGTH = int(os.environ.get("AI_MAX_CONTENT", "6000"))
-DELAY_BETWEEN_REQUESTS = int(os.environ.get("AI_DELAY", "1"))
+DELAY_BETWEEN_REQUESTS = float(os.environ.get("AI_DELAY", "1"))
+AI_TIMEOUT = int(os.environ.get("AI_TIMEOUT", "60"))
+AI_MAX_RETRIES = int(os.environ.get("AI_MAX_RETRIES", "3"))
 
 # File paths
 INPUT_DIR = "text_output"
@@ -234,17 +236,20 @@ Respond ONLY dengan valid JSON, tidak ada teks lain."""
 # ============================================================================
 # AI EXTRACTION FUNCTIONS
 # ============================================================================
-def extract_info_with_ai(content: str, max_retries: int = 3) -> dict:
+def extract_info_with_ai(content: str, max_retries: int = None) -> dict:
     """
     Extract information using configured AI provider
     
     Args:
         content: The news article text
-        max_retries: Maximum retry attempts
+        max_retries: Maximum retry attempts (uses AI_MAX_RETRIES env if None)
     
     Returns:
         Dictionary with extracted info
     """
+    if max_retries is None:
+        max_retries = AI_MAX_RETRIES
+    
     if AI_PROVIDER == "gemini":
         return _extract_with_gemini(content, max_retries)
     else:
@@ -266,7 +271,21 @@ def _extract_with_gemini(content: str, max_retries: int) -> dict:
             )
             
             prompt = EXTRACTION_PROMPT.format(content=content[:MAX_CONTENT_LENGTH])
+            
+            # Log API call start time
+            import datetime
+            start_time = datetime.datetime.now()
+            print(f"      🕐 API call at {start_time.strftime('%H:%M:%S.%f')[:-3]}")
+            
             response = model.generate_content(prompt)
+            
+            # Log API response time
+            end_time = datetime.datetime.now()
+            duration = (end_time - start_time).total_seconds()
+            if duration > 10:
+                print(f"      ⏱️  API took {duration:.1f}s (SLOW!)")
+            else:
+                print(f"      ✓ API responded in {duration:.1f}s")
             
             # Check if response is valid
             if not response:
@@ -354,10 +373,21 @@ def _extract_with_gemini(content: str, max_retries: int) -> dict:
             return _parse_ai_response(response_text, attempt, max_retries)
         
         except Exception as e:
-            print(f"      ⚠️  Gemini error: {str(e)[:80]} (attempt {attempt + 1})")
-            print(f"         Full error: {type(e).__name__}: {str(e)[:150]}")
+            error_type = type(e).__name__
+            error_msg = str(e)
+            
+            # Detect rate limit errors
+            if "429" in error_msg or "ResourceExhausted" in error_type or "quota" in error_msg.lower() or "rate" in error_msg.lower():
+                print(f"      🚨 RATE LIMIT: {error_type}")
+                print(f"         {error_msg[:250]}")
+            else:
+                print(f"      ⚠️  Gemini error: {str(e)[:80]} (attempt {attempt + 1})")
+                print(f"         Full: {error_type}: {error_msg[:150]}")
+            
             if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
+                backoff = 2 ** attempt
+                print(f"      ⏳ Retrying in {backoff}s...")
+                time.sleep(backoff)
                 continue
     
     return _empty_result()
