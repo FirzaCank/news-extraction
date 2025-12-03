@@ -46,6 +46,7 @@ Thumbs.db
 # Project Output Directories (generated data)
 text_output/
 final_output/
+self_content_input/
 log/
 *.log
 local_test_run.log
