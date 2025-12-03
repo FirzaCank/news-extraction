@@ -46,7 +46,7 @@ gcloud run jobs deploy ${JOB_NAME} \
     --set-env-vars="GCS_BUCKET_NAME=${GCS_BUCKET},GCS_INPUT_PATH=text_output,GCS_OUTPUT_PATH=final_output,LOCAL_MODE=false,AI_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,AI_TEMPERATURE=0.1,AI_MAX_CONTENT=6000,AI_DELAY=0.3,AI_TIMEOUT=45,AI_MAX_RETRIES=2,DELAY_BETWEEN_URLS=10,DELAY_BETWEEN_PAGES=7,MAX_PAGES=5,MAX_RETRIES=3,RETRY_DELAY=5" \
     --set-secrets="DIFFBOT_TOKEN=diffbot-key:latest,GEMINI_API_KEY=gemini-api-key:latest" \
     --max-retries=0 \
-    --task-timeout=172800 \
+    --task-timeout=86400 \
     --memory=4Gi \
     --cpu=4 \
     --parallelism=1 \
@@ -66,7 +66,7 @@ echo "Job Details:"
 echo "  Name: ${JOB_NAME}"
 echo "  Region: ${REGION}"
 echo "  Image: ${ARTIFACT_REGISTRY}:latest"
-echo "  Timeout: 2 days (172800s)"
+echo "  Timeout: 24 hours (86400s)"
 echo "  Memory: 4Gi"
 echo "  CPU: 4"
 echo "  Max Retries: 0"

@@ -568,6 +568,89 @@ def match_speaker(spoke_person: str, whitelist: list) -> dict:
 
 
 # ============================================================================
+# CHECKPOINT SAVE (every 100 items)
+# ============================================================================
+def save_checkpoint_to_gcs(results: list, bucket_name: str, input_filename: str, checkpoint_num: int, whitelist: list):
+    """Save checkpoint parsed results to GCS checkpoint/ folder"""
+    try:
+        client = get_gcs_client()
+        if not client:
+            print(f"      ⚠️  Cannot save checkpoint {checkpoint_num} - GCS client unavailable")
+            return None
+        
+        bucket = client.bucket(bucket_name)
+        
+        # Generate checkpoint filename with timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        if input_filename and input_filename.startswith('output_'):
+            base_name = input_filename.replace('output_', 'checkpoint_final_', 1).replace('.csv', '')
+        else:
+            base_name = 'checkpoint_final'
+        
+        checkpoint_filename = f"{base_name}_{checkpoint_num:03d}_{timestamp}.csv"
+        blob_path = f"checkpoint_parsing/{checkpoint_filename}"
+        blob = bucket.blob(blob_path)
+        
+        # Create CSV in memory
+        import io
+        output = io.StringIO()
+        writer = csv.writer(output, delimiter=',', quoting=csv.QUOTE_ALL)
+        writer.writerow([
+            'id', 'date', 'source',
+            'quote', 'spoke_person',
+            'province', 'city',
+            'jabatan', 'category', 'alias', 'fullname'
+        ])
+        
+        row_count = 0
+        for result in results:
+            quotes = result['quotes']
+            speakers = result['speakers']
+            
+            if not quotes:
+                writer.writerow([
+                    result['id'],
+                    result['date'],
+                    result['source'],
+                    '', '', 
+                    result['province'] or '',
+                    result['city'] or '',
+                    '', '', '', ''
+                ])
+                row_count += 1
+            else:
+                for i, quote in enumerate(quotes):
+                    spoke_person = speakers[i] if i < len(speakers) else ''
+                    match = match_speaker(spoke_person, whitelist)
+                    
+                    writer.writerow([
+                        result['id'],
+                        result['date'],
+                        result['source'],
+                        quote,
+                        spoke_person,
+                        result['province'] or '',
+                        result['city'] or '',
+                        match['jabatan'],
+                        match['category'],
+                        match['alias'],
+                        match['fullname']
+                    ])
+                    row_count += 1
+        
+        # Upload to GCS
+        blob.upload_from_string(output.getvalue(), content_type='text/csv')
+        
+        gcs_uri = f"gs://{bucket_name}/{blob_path}"
+        print(f"      💾 Checkpoint {checkpoint_num} saved: {checkpoint_filename} ({row_count} rows)")
+        
+        return gcs_uri
+        
+    except Exception as e:
+        print(f"      ⚠️  Error saving checkpoint {checkpoint_num}: {str(e)}")
+        return None
+
+# ============================================================================
 # CSV PROCESSING
 # ============================================================================
 def read_input_csv(file_path: str) -> list:
@@ -669,7 +752,7 @@ def save_parsed_csv(results: list, input_filename: str, whitelist: list):
 # ============================================================================
 # BATCH PROCESSING
 # ============================================================================
-def batch_parse(articles: list) -> list:
+def batch_parse(articles: list, whitelist: list = None, input_filename: str = None) -> list:
     """Process all articles with AI extraction"""
     results = []
     total = len(articles)
@@ -716,6 +799,12 @@ def batch_parse(articles: list) -> list:
               f"{len(extracted['speakers'])} speakers, "
               f"Province: {extracted['province'] or 'N/A'}, "
               f"City: {extracted['city'] or 'N/A'}")
+        
+        # Save checkpoint every 100 items
+        if i % 100 == 0 and not LOCAL_MODE and whitelist is not None:
+            checkpoint_num = i // 100
+            print(f"\n📦 Saving checkpoint {checkpoint_num} (items 1-{i})...")
+            save_checkpoint_to_gcs(results, GCS_BUCKET_NAME, input_filename or 'output', checkpoint_num, whitelist)
         
         # Rate limiting
         if i < total:
@@ -796,10 +885,10 @@ def main():
         sys.exit(1)
     
     # Parse with AI
-    results = batch_parse(articles)
+    input_filename = os.path.basename(input_file)
+    results = batch_parse(articles, whitelist=whitelist, input_filename=input_filename)
     
     # Save output with whitelist mapping
-    input_filename = os.path.basename(input_file)
     output_path = save_parsed_csv(results, input_filename, whitelist)
     
     if output_path:

@@ -580,6 +580,60 @@ def batch_scrape(url_data_list, token):
     return results
 
 # ============================================================================
+# CHECKPOINT SAVE (every 100 items)
+# ============================================================================
+def save_checkpoint_to_gcs(results, bucket_name, input_filename, checkpoint_num):
+    """Save checkpoint results to GCS checkpoint/ folder"""
+    try:
+        client = get_gcs_client()
+        if not client:
+            print(f"      ⚠️  Cannot save checkpoint {checkpoint_num} - GCS client unavailable")
+            return None
+        
+        bucket = client.bucket(bucket_name)
+        
+        # Generate checkpoint filename with timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        if input_filename and input_filename.startswith('input_'):
+            base_name = input_filename.replace('input_', 'checkpoint_', 1).replace('.csv', '')
+        else:
+            base_name = 'checkpoint'
+        
+        checkpoint_filename = f"{base_name}_{checkpoint_num:03d}_{timestamp}.csv"
+        blob_path = f"checkpoint_extraction/{checkpoint_filename}"
+        blob = bucket.blob(blob_path)
+        
+        # Create CSV in memory
+        import io
+        output = io.StringIO()
+        writer = csv.writer(output, delimiter=',', quoting=csv.QUOTE_ALL)
+        writer.writerow(['ID', 'date_article', 'ingestion_time', 'source', 'content'])
+        
+        success_count = 0
+        for result in results:
+            if result['success']:
+                writer.writerow([
+                    result['id'],
+                    result['date'],
+                    result['ingestion_time'],
+                    result['url'],
+                    result['content']
+                ])
+                success_count += 1
+        
+        # Upload to GCS
+        blob.upload_from_string(output.getvalue(), content_type='text/csv')
+        
+        gcs_uri = f"gs://{bucket_name}/{blob_path}"
+        print(f"      💾 Checkpoint {checkpoint_num} saved: {checkpoint_filename} ({success_count} articles)")
+        
+        return gcs_uri
+        
+    except Exception as e:
+        print(f"      ⚠️  Error saving checkpoint {checkpoint_num}: {str(e)}")
+        return None
+
+# ============================================================================
 # SAVE RESULTS
 # ============================================================================
 def save_to_gcs(results, bucket_name, output_path, input_filename=None):
@@ -731,10 +785,16 @@ if __name__ == "__main__":
     input_filename = None
     if LOCAL_MODE:
         print(f"\n🏠 LOCAL MODE: Reading from {INPUT_FILE}")
-        urls, input_filename = read_input_csv(INPUT_FILE), None
+        urls = read_input_csv(INPUT_FILE)
+        input_filename = os.path.basename(INPUT_FILE)
     else:
         print(f"\n☁️  CLOUD MODE: Reading latest file from gs://{GCS_BUCKET_NAME}/link_input/")
         urls, input_filename = read_input_from_gcs(GCS_BUCKET_NAME, 'link_input')
+    
+    # Add input_filename to each url_data for checkpoint naming
+    if urls and input_filename:
+        for url_data in urls:
+            url_data['input_filename'] = input_filename
     
     if not urls:
         print("\n❌ No valid URLs found. Exiting...")
