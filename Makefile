@@ -30,6 +30,7 @@ help:
 	@echo "  make parse-file  - Parse specific file: make parse-file FILE=output/file.csv"
 	@echo "  make parse-gemini - Parse with Google Gemini (explicit override)"
 	@echo "  make parse-openai - Parse with OpenAI (explicit override)"
+	@echo "  make parse-self-local - Parse self content locally (skip extraction)"
 	@echo ""
 	@echo "Full Pipeline:"
 	@echo "  make full-run    - Run complete pipeline: Scrape → Parse (auto)"
@@ -206,6 +207,23 @@ parse-openai:
 	@export $$(cat .env | grep -v '^\#' | xargs) && \
 		AI_PROVIDER=openai ./venv/bin/python parse_news.py 2>&1 | tee log/parser_openai.log
 	@echo "📄 Log saved to: log/parser_openai.log"
+
+# Parse self content locally (skip extraction)
+parse-self-local:
+	@echo "🤖 Parsing Self Content (Local Mode)..."
+	@if [ ! -f .env ]; then \
+		echo "❌ Error: .env file not found!"; \
+		exit 1; \
+	fi
+	@if [ ! -d self_content_input ] || [ -z "$$(ls -A self_content_input/*.csv 2>/dev/null)" ]; then \
+		echo "❌ Error: No CSV files found in self_content_input/"; \
+		exit 1; \
+	fi
+	@mkdir -p log
+	@export $$(cat .env | grep -v '^\#' | xargs) && \
+		LOCAL_MODE=true ./venv/bin/python parse_self_content.py 2>&1 | tee log/parser_self_local.log
+	@echo "📄 Log saved to: log/parser_self_local.log"
+	@echo "📁 Output: final_output/"
 
 # Full pipeline: Scrape → Parse
 full-run:
