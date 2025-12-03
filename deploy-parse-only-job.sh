@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Deploy Self Content Parser Cloud Run Job (Parse-Only)
+# Deploy Self Content Parser Cloud Run Job (Optimized)
 
 set -e
 
@@ -34,7 +34,7 @@ fi
 
 # Deploy Cloud Run Job
 echo ""
-echo "📦 Deploying Cloud Run Job..."
+echo "📦 Deploying Cloud Run Job with OPTIMIZED settings..."
 echo ""
 
 gcloud run jobs deploy ${JOB_NAME} \
@@ -42,12 +42,12 @@ gcloud run jobs deploy ${JOB_NAME} \
     --region=${REGION} \
     --project=${PROJECT_ID} \
     --service-account=${SERVICE_ACCOUNT} \
-    --set-env-vars="GCS_BUCKET_NAME=${GCS_BUCKET},GCS_INPUT_PATH=self_content_input,GCS_OUTPUT_PATH=final_output,LOCAL_MODE=false,AI_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,AI_TEMPERATURE=0.1,AI_MAX_CONTENT=6000,AI_DELAY=1" \
+    --set-env-vars="GCS_BUCKET_NAME=${GCS_BUCKET},GCS_INPUT_PATH=self_content_input,GCS_OUTPUT_PATH=final_output,LOCAL_MODE=false,AI_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,AI_TEMPERATURE=0.1,AI_MAX_CONTENT=6000,AI_DELAY=0.3,AI_TIMEOUT=45,AI_MAX_RETRIES=2" \
     --set-secrets="GEMINI_API_KEY=gemini-api-key:latest" \
-    --max-retries=1 \
-    --task-timeout=3600 \
-    --memory=2Gi \
-    --cpu=2
+    --max-retries=0 \
+    --task-timeout=172800 \
+    --memory=4Gi \
+    --cpu=4
 
 echo ""
 echo "=================================================="
@@ -58,9 +58,15 @@ echo "Job Details:"
 echo "  Name: ${JOB_NAME}"
 echo "  Region: ${REGION}"
 echo "  Image: ${IMAGE_PATH}"
-echo "  Timeout: 1 hour"
-echo "  Memory: 2Gi"
-echo "  CPU: 2"
+echo "  Timeout: 2 days (172800s)"
+echo "  Memory: 4Gi"
+echo "  CPU: 4"
+echo "  Max Retries: 0"
+echo ""
+echo "Optimized AI Settings:"
+echo "  • AI Delay: 0.3s per request (reduced from 0.5s)"
+echo "  • AI Timeout: 45s per article (reduced from 60s)"
+echo "  • AI Max Retries: 2 (reduced from 3)"
 echo ""
 echo "Secrets:"
 echo "  • gemini-api-key → GEMINI_API_KEY"

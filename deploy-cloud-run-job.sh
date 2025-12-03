@@ -43,26 +43,12 @@ gcloud run jobs deploy ${JOB_NAME} \
     --image=${ARTIFACT_REGISTRY}:latest \
     --region=${REGION} \
     --service-account=${SERVICE_ACCOUNT} \
-    --set-env-vars="GCS_BUCKET_NAME=${GCS_BUCKET}" \
-    --set-env-vars="GCS_INPUT_PATH=text_output" \
-    --set-env-vars="GCS_OUTPUT_PATH=final_output" \
-    --set-env-vars="AI_PROVIDER=gemini" \
-    --set-env-vars="GEMINI_MODEL=gemini-2.5-flash" \
-    --set-env-vars="AI_TEMPERATURE=0.1" \
-    --set-env-vars="AI_MAX_CONTENT=6000" \
-    --set-env-vars="AI_DELAY=1" \
-    --set-env-vars="DELAY_BETWEEN_URLS=15" \
-    --set-env-vars="DELAY_BETWEEN_PAGES=10" \
-    --set-env-vars="MAX_PAGES=5" \
-    --set-env-vars="MAX_RETRIES=3" \
-    --set-env-vars="RETRY_DELAY=5" \
-    --set-env-vars="LOCAL_MODE=false" \
-    --set-secrets="DIFFBOT_TOKEN=diffbot-key:latest" \
-    --set-secrets="GEMINI_API_KEY=gemini-api-key:latest" \
+    --set-env-vars="GCS_BUCKET_NAME=${GCS_BUCKET},GCS_INPUT_PATH=text_output,GCS_OUTPUT_PATH=final_output,LOCAL_MODE=false,AI_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,AI_TEMPERATURE=0.1,AI_MAX_CONTENT=6000,AI_DELAY=0.3,AI_TIMEOUT=45,AI_MAX_RETRIES=2,DELAY_BETWEEN_URLS=10,DELAY_BETWEEN_PAGES=7,MAX_PAGES=5,MAX_RETRIES=3,RETRY_DELAY=5" \
+    --set-secrets="DIFFBOT_TOKEN=diffbot-key:latest,GEMINI_API_KEY=gemini-api-key:latest" \
     --max-retries=0 \
-    --task-timeout=3600 \
-    --memory=2Gi \
-    --cpu=2 \
+    --task-timeout=172800 \
+    --memory=4Gi \
+    --cpu=4 \
     --parallelism=1 \
     --tasks=1
 
@@ -80,9 +66,20 @@ echo "Job Details:"
 echo "  Name: ${JOB_NAME}"
 echo "  Region: ${REGION}"
 echo "  Image: ${ARTIFACT_REGISTRY}:latest"
-echo "  Timeout: 1 hour"
-echo "  Memory: 2Gi"
-echo "  CPU: 2"
+echo "  Timeout: 2 days (172800s)"
+echo "  Memory: 4Gi"
+echo "  CPU: 4"
+echo "  Max Retries: 0"
+echo ""
+echo "Optimized AI Settings:"
+echo "  • AI Delay: 0.3s per request"
+echo "  • AI Timeout: 45s per article"
+echo "  • AI Max Retries: 2"
+echo ""
+echo "Scraper Settings:"
+echo "  • Delay Between URLs: 15s"
+echo "  • Delay Between Pages: 10s"
+echo "  • Max Pages: 5"
 echo ""
 echo "Secrets:"
 echo "  • diffbot-key → DIFFBOT_TOKEN"
