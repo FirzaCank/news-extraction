@@ -10,6 +10,8 @@ import os
 import sys
 import time
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 from google.cloud import secretmanager
 from google.cloud import storage
 
@@ -166,6 +168,7 @@ MAX_CONTENT_LENGTH = int(os.environ.get("AI_MAX_CONTENT", "6000"))
 DELAY_BETWEEN_REQUESTS = float(os.environ.get("AI_DELAY", "1"))
 AI_TIMEOUT = int(os.environ.get("AI_TIMEOUT", "60"))
 AI_MAX_RETRIES = int(os.environ.get("AI_MAX_RETRIES", "3"))
+PARSING_THREADS = int(os.environ.get("PARSING_THREADS", "1"))
 
 OUTPUT_DIR = "final_output"
 WHITELIST_DIR = "whitelist_input"
@@ -235,92 +238,37 @@ from parse_news import (
 # ============================================================================
 def extract_info_with_ai(content: str, max_retries: int = None, timeout: int = None) -> dict:
     """
-    Extract information using configured AI provider with timeout and better error handling
+    Extract information using configured AI provider
     
     Args:
         content: The news article text
         max_retries: Maximum retry attempts (uses AI_MAX_RETRIES env if None)
-        timeout: Maximum time in seconds for one article (uses AI_TIMEOUT env if None)
+        timeout: Not used in multithreaded mode (kept for compatibility)
     
     Returns:
         Dictionary with extracted info or error indicator
     """
-    import signal
-    from datetime import datetime
-    
     # Use env defaults if not provided
     if max_retries is None:
         max_retries = AI_MAX_RETRIES
-    if timeout is None:
-        timeout = AI_TIMEOUT
     
-    def timeout_handler(signum, frame):
-        raise TimeoutError("AI extraction timeout")
-    
-    start_time = datetime.now()
-    
-    for attempt in range(max_retries):
-        # Set timeout alarm (only works on Unix-like systems)
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(timeout)
-        
-        try:
-            if attempt > 0:
-                print(f"      🔄 Retry attempt {attempt + 1}/{max_retries}")
-                time.sleep(2)  # Small delay before retry
-            
-            if AI_PROVIDER == "gemini":
-                result = _extract_with_gemini(content, max_retries=1)  # No nested retries
-            else:
-                result = _extract_with_openai(content, max_retries=1)
-            
-            signal.alarm(0)  # Cancel alarm
-            elapsed = (datetime.now() - start_time).total_seconds()
-            print(f"      ⏱️  Completed in {elapsed:.1f}s")
-            return result
-            
-        except TimeoutError:
-            signal.alarm(0)  # Cancel alarm
-            elapsed = (datetime.now() - start_time).total_seconds()
-            
-            if attempt < max_retries - 1:
-                print(f"      ⏱️  Timeout after {timeout}s (attempt {attempt + 1}) - retrying...")
-                continue
-            else:
-                print(f"      ⏱️  Final timeout after {elapsed:.1f}s total - skipping")
-                return {
-                    'quotes': [],
-                    'speakers': [],
-                    'province': 'ERROR TIMEOUT',
-                    'city': 'ERROR TIMEOUT',
-                    'error': 'timeout'
-                }
-                
-        except Exception as e:
-            signal.alarm(0)  # Cancel alarm
-            error_msg = str(e)[:100]
-            
-            if attempt < max_retries - 1:
-                print(f"      ❌ Error: {error_msg} - retrying...")
-                continue
-            else:
-                print(f"      ❌ Final error: {error_msg}")
-                return {
-                    'quotes': [],
-                    'speakers': [],
-                    'province': 'ERROR',
-                    'city': 'ERROR',
-                    'error': 'exception'
-                }
-    
-    # Should not reach here
-    return {
-        'quotes': [],
-        'speakers': [],
-        'province': 'ERROR',
-        'city': 'ERROR',
-        'error': 'unknown'
-    }
+    # Directly use the imported functions from parse_news
+    # They already have retry logic built-in
+    try:
+        if AI_PROVIDER == "gemini":
+            return _extract_with_gemini(content, max_retries=max_retries)
+        else:
+            return _extract_with_openai(content, max_retries=max_retries)
+    except Exception as e:
+        error_msg = str(e)[:100]
+        print(f"      ❌ Error: {error_msg}")
+        return {
+            'quotes': [],
+            'speakers': [],
+            'province': 'ERROR',
+            'city': 'ERROR',
+            'error': 'exception'
+        }
 
 # ============================================================================
 # CHECKPOINT SAVE (every 100 items)
@@ -505,62 +453,107 @@ def save_parsed_csv(results: list, input_filename: str, whitelist: list):
         print(f"❌ Error saving CSV: {str(e)}")
         return None
 
-def batch_parse(articles: list, whitelist: list = None, input_filename: str = None) -> list:
-    """Process all articles with AI extraction"""
-    results = []
-    total = len(articles)
+def parse_single_article(article: dict, index: int, total: int) -> dict:
+    """Parse single article - used by thread pool"""
+    thread_id = threading.current_thread().name
+    print(f"\n[{index}/{total}] ID: {article['id']} | Source: {article['source']} (Thread: {thread_id})")
     
-    print(f"\n📊 Processing {total} articles...")
-    print("─" * 60)
-    
-    for i, article in enumerate(articles, 1):
-        print(f"\n[{i}/{total}] ID: {article['id']} | Source: {article['source']}")
-        
-        if not article['content'] or article['content'].strip() == '':
-            print("   ⏭️  Skipped (no content)")
-            results.append({
-                'id': article['id'],
-                'date': article['date'],
-                'source': article['source'],
-                'quotes': [],
-                'speakers': [],
-                'province': None,
-                'city': None
-            })
-            continue
-        
-        print(f"   🔍 Extracting with {AI_PROVIDER.upper()}...")
-        extracted = extract_info_with_ai(article['content'], timeout=60)
-        
-        result = {
+    if not article['content'] or article['content'].strip() == '':
+        print("   ⏭️  Skipped (no content)")
+        return {
             'id': article['id'],
             'date': article['date'],
             'source': article['source'],
-            'quotes': extracted['quotes'],
-            'speakers': extracted['speakers'],
-            'province': extracted['province'],
-            'city': extracted['city'],
-            'error': extracted.get('error', '')
+            'quotes': [],
+            'speakers': [],
+            'province': None,
+            'city': None
         }
-        
-        results.append(result)
-        
-        if extracted.get('error') == 'timeout':
-            print(f"   ⏱️  TIMEOUT - Skipped after 60s")
-        else:
-            print(f"   ✅ Found: {len(extracted['quotes'])} quotes, "
-                  f"{len(extracted['speakers'])} speakers, "
-                  f"Province: {extracted['province'] or 'N/A'}, "
-                  f"City: {extracted['city'] or 'N/A'}")
-        
-        # Save checkpoint every 100 items
-        if i % 100 == 0 and not LOCAL_MODE and whitelist is not None:
-            checkpoint_num = i // 100
-            print(f"\n📦 Saving checkpoint {checkpoint_num} (items 1-{i})...")
-            save_checkpoint_to_gcs(results, GCS_BUCKET_NAME, input_filename or 'content', checkpoint_num, whitelist)
-        
-        if i < total:
-            time.sleep(DELAY_BETWEEN_REQUESTS)
+    
+    print(f"   🔍 Extracting with {AI_PROVIDER.upper()}...")
+    extracted = extract_info_with_ai(article['content'], timeout=60)
+    
+    result = {
+        'id': article['id'],
+        'date': article['date'],
+        'source': article['source'],
+        'quotes': extracted['quotes'],
+        'speakers': extracted['speakers'],
+        'province': extracted['province'],
+        'city': extracted['city'],
+        'error': extracted.get('error', '')
+    }
+    
+    if extracted.get('error') == 'timeout':
+        print(f"   ⏱️  TIMEOUT - Skipped after 60s")
+    else:
+        print(f"   ✅ Found: {len(extracted['quotes'])} quotes, "
+              f"{len(extracted['speakers'])} speakers, "
+              f"Province: {extracted['province'] or 'N/A'}, "
+              f"City: {extracted['city'] or 'N/A'}")
+    
+    return result
+
+def batch_parse(articles: list, whitelist: list = None, input_filename: str = None) -> list:
+    """Process all articles with AI extraction (multithreaded)"""
+    results = []
+    results_lock = threading.Lock()
+    total = len(articles)
+    
+    print(f"\n📊 Processing {total} articles...")
+    print(f"🧵 Threads: {PARSING_THREADS} parallel workers")
+    print("─" * 60)
+    
+    if PARSING_THREADS == 1:
+        # Single-threaded mode (original behavior)
+        for i, article in enumerate(articles, 1):
+            result = parse_single_article(article, i, total)
+            results.append(result)
+            
+            # Save checkpoint every 100 items
+            if i % 100 == 0 and not LOCAL_MODE and whitelist is not None:
+                checkpoint_num = i // 100
+                print(f"\n📦 Saving checkpoint {checkpoint_num} (items 1-{i})...")
+                save_checkpoint_to_gcs(results, GCS_BUCKET_NAME, input_filename or 'content', checkpoint_num, whitelist)
+            
+            if i < total:
+                time.sleep(DELAY_BETWEEN_REQUESTS)
+    else:
+        # Multi-threaded mode
+        completed = 0
+        with ThreadPoolExecutor(max_workers=PARSING_THREADS) as executor:
+            # Submit all tasks
+            future_to_article = {}
+            for i, article in enumerate(articles, 1):
+                future = executor.submit(parse_single_article, article, i, total)
+                future_to_article[future] = i
+            
+            # Process completed tasks
+            for future in as_completed(future_to_article):
+                i = future_to_article[future]
+                try:
+                    result = future.result()
+                    with results_lock:
+                        results.append(result)
+                        completed += 1
+                        
+                        # Save checkpoint every 100 items
+                        if completed % 100 == 0 and not LOCAL_MODE and whitelist is not None:
+                            checkpoint_num = completed // 100
+                            print(f"\n📦 Saving checkpoint {checkpoint_num} (items 1-{completed})...")
+                            save_checkpoint_to_gcs(results, GCS_BUCKET_NAME, input_filename or 'content', checkpoint_num, whitelist)
+                except Exception as e:
+                    print(f"\n❌ Thread error for item {i}: {str(e)}")
+                    with results_lock:
+                        results.append({
+                            'id': articles[i-1]['id'],
+                            'date': articles[i-1]['date'],
+                            'source': articles[i-1]['source'],
+                            'quotes': [],
+                            'speakers': [],
+                            'province': None,
+                            'city': None
+                        })
     
     print("\n" + "─" * 60)
     return results

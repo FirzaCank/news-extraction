@@ -43,7 +43,7 @@ gcloud run jobs deploy ${JOB_NAME} \
     --image=${ARTIFACT_REGISTRY}:latest \
     --region=${REGION} \
     --service-account=${SERVICE_ACCOUNT} \
-    --set-env-vars="GCS_BUCKET_NAME=${GCS_BUCKET},GCS_INPUT_PATH=text_output,GCS_OUTPUT_PATH=final_output,LOCAL_MODE=false,AI_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,AI_TEMPERATURE=0.1,AI_MAX_CONTENT=6000,AI_DELAY=0.3,AI_TIMEOUT=45,AI_MAX_RETRIES=2,DELAY_BETWEEN_URLS=15,DELAY_BETWEEN_PAGES=10,MAX_PAGES=5,MAX_RETRIES=3,RETRY_DELAY=5" \
+    --set-env-vars="GCS_BUCKET_NAME=${GCS_BUCKET},GCS_INPUT_PATH=text_output,GCS_OUTPUT_PATH=final_output,LOCAL_MODE=false,AI_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,AI_TEMPERATURE=0.1,AI_MAX_CONTENT=6000,AI_DELAY=0.3,AI_TIMEOUT=45,AI_MAX_RETRIES=2,DELAY_BETWEEN_URLS=10,DELAY_BETWEEN_PAGES=7,MAX_PAGES=5,MAX_RETRIES=3,RETRY_DELAY=5,EXTRACTION_THREADS=4,PARSING_THREADS=4" \
     --set-secrets="DIFFBOT_TOKEN=diffbot-key:latest,GEMINI_API_KEY=gemini-api-key:latest" \
     --max-retries=0 \
     --task-timeout=86400 \
@@ -71,14 +71,18 @@ echo "  Memory: 4Gi"
 echo "  CPU: 4"
 echo "  Max Retries: 0"
 echo ""
+echo "Multithreading Settings:"
+echo "  • Extraction Threads: 4 (parallel Diffbot scraping)"
+echo "  • Parsing Threads: 4 (parallel AI parsing)"
+echo ""
 echo "Optimized AI Settings:"
 echo "  • AI Delay: 0.3s per request"
 echo "  • AI Timeout: 45s per article"
 echo "  • AI Max Retries: 2"
 echo ""
 echo "Scraper Settings:"
-echo "  • Delay Between URLs: 15s"
-echo "  • Delay Between Pages: 10s"
+echo "  • Delay Between URLs: 10s"
+echo "  • Delay Between Pages: 7s"
 echo "  • Max Pages: 5"
 echo ""
 echo "Secrets:"

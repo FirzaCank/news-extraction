@@ -11,6 +11,8 @@ import os
 import sys
 import time
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 from google.cloud import secretmanager
 from google.cloud import storage
 import io
@@ -175,6 +177,7 @@ MAX_CONTENT_LENGTH = int(os.environ.get("AI_MAX_CONTENT", "6000"))
 DELAY_BETWEEN_REQUESTS = float(os.environ.get("AI_DELAY", "1"))
 AI_TIMEOUT = int(os.environ.get("AI_TIMEOUT", "60"))
 AI_MAX_RETRIES = int(os.environ.get("AI_MAX_RETRIES", "3"))
+PARSING_THREADS = int(os.environ.get("PARSING_THREADS", "1"))
 
 # File paths
 INPUT_DIR = "text_output"
@@ -752,63 +755,108 @@ def save_parsed_csv(results: list, input_filename: str, whitelist: list):
 # ============================================================================
 # BATCH PROCESSING
 # ============================================================================
-def batch_parse(articles: list, whitelist: list = None, input_filename: str = None) -> list:
-    """Process all articles with AI extraction"""
-    results = []
-    total = len(articles)
+def parse_single_article(article: dict, index: int, total: int) -> dict:
+    """Parse single article - used by thread pool"""
+    thread_id = threading.current_thread().name
+    print(f"\n[{index}/{total}] ID: {article['id']} | Source: {article['source']} (Thread: {thread_id})")
     
-    print(f"\n📊 Processing {total} articles...")
-    print("─" * 60)
-    
-    for i, article in enumerate(articles, 1):
-        print(f"\n[{i}/{total}] ID: {article['id']} | Source: {article['source']}")
-        
-        # Skip if no content
-        if not article['content'] or article['content'].strip() == '':
-            print("   ⏭️  Skipped (no content)")
-            results.append({
-                'id': article['id'],
-                'date': article['date'],
-                'source': article['source'],
-                'quotes': [],
-                'speakers': [],
-                'province': None,
-                'city': None
-            })
-            continue
-        
-        # Extract with AI
-        print(f"   🔍 Extracting with {AI_PROVIDER.upper()}...")
-        extracted = extract_info_with_ai(article['content'])
-        
-        # Merge with original data
-        result = {
+    # Skip if no content
+    if not article['content'] or article['content'].strip() == '':
+        print("   ⏭️  Skipped (no content)")
+        return {
             'id': article['id'],
             'date': article['date'],
             'source': article['source'],
-            'quotes': extracted['quotes'],
-            'speakers': extracted['speakers'],
-            'province': extracted['province'],
-            'city': extracted['city']
+            'quotes': [],
+            'speakers': [],
+            'province': None,
+            'city': None
         }
-        
-        results.append(result)
-        
-        # Print summary
-        print(f"   ✅ Found: {len(extracted['quotes'])} quotes, "
-              f"{len(extracted['speakers'])} speakers, "
-              f"Province: {extracted['province'] or 'N/A'}, "
-              f"City: {extracted['city'] or 'N/A'}")
-        
-        # Save checkpoint every 100 items
-        if i % 100 == 0 and not LOCAL_MODE and whitelist is not None:
-            checkpoint_num = i // 100
-            print(f"\n📦 Saving checkpoint {checkpoint_num} (items 1-{i})...")
-            save_checkpoint_to_gcs(results, GCS_BUCKET_NAME, input_filename or 'output', checkpoint_num, whitelist)
-        
-        # Rate limiting
-        if i < total:
-            time.sleep(DELAY_BETWEEN_REQUESTS)
+    
+    # Extract with AI
+    print(f"   🔍 Extracting with {AI_PROVIDER.upper()}...")
+    extracted = extract_info_with_ai(article['content'])
+    
+    # Merge with original data
+    result = {
+        'id': article['id'],
+        'date': article['date'],
+        'source': article['source'],
+        'quotes': extracted['quotes'],
+        'speakers': extracted['speakers'],
+        'province': extracted['province'],
+        'city': extracted['city']
+    }
+    
+    # Print summary
+    print(f"   ✅ Found: {len(extracted['quotes'])} quotes, "
+          f"{len(extracted['speakers'])} speakers, "
+          f"Province: {extracted['province'] or 'N/A'}, "
+          f"City: {extracted['city'] or 'N/A'}")
+    
+    return result
+
+def batch_parse(articles: list, whitelist: list = None, input_filename: str = None) -> list:
+    """Process all articles with AI extraction (multithreaded)"""
+    results = []
+    results_lock = threading.Lock()
+    total = len(articles)
+    
+    print(f"\n📊 Processing {total} articles...")
+    print(f"🧵 Threads: {PARSING_THREADS} parallel workers")
+    print("─" * 60)
+    
+    if PARSING_THREADS == 1:
+        # Single-threaded mode (original behavior)
+        for i, article in enumerate(articles, 1):
+            result = parse_single_article(article, i, total)
+            results.append(result)
+            
+            # Save checkpoint every 100 items
+            if i % 100 == 0 and not LOCAL_MODE and whitelist is not None:
+                checkpoint_num = i // 100
+                print(f"\n📦 Saving checkpoint {checkpoint_num} (items 1-{i})...")
+                save_checkpoint_to_gcs(results, GCS_BUCKET_NAME, input_filename or 'output', checkpoint_num, whitelist)
+            
+            # Rate limiting
+            if i < total:
+                time.sleep(DELAY_BETWEEN_REQUESTS)
+    else:
+        # Multi-threaded mode
+        completed = 0
+        with ThreadPoolExecutor(max_workers=PARSING_THREADS) as executor:
+            # Submit all tasks
+            future_to_article = {}
+            for i, article in enumerate(articles, 1):
+                future = executor.submit(parse_single_article, article, i, total)
+                future_to_article[future] = i
+            
+            # Process completed tasks
+            for future in as_completed(future_to_article):
+                i = future_to_article[future]
+                try:
+                    result = future.result()
+                    with results_lock:
+                        results.append(result)
+                        completed += 1
+                        
+                        # Save checkpoint every 100 items
+                        if completed % 100 == 0 and not LOCAL_MODE and whitelist is not None:
+                            checkpoint_num = completed // 100
+                            print(f"\n📦 Saving checkpoint {checkpoint_num} (items 1-{completed})...")
+                            save_checkpoint_to_gcs(results, GCS_BUCKET_NAME, input_filename or 'output', checkpoint_num, whitelist)
+                except Exception as e:
+                    print(f"\n❌ Thread error for item {i}: {str(e)}")
+                    with results_lock:
+                        results.append({
+                            'id': articles[i-1]['id'],
+                            'date': articles[i-1]['date'],
+                            'source': articles[i-1]['source'],
+                            'quotes': [],
+                            'speakers': [],
+                            'province': None,
+                            'city': None
+                        })
     
     print("\n" + "─" * 60)
     return results

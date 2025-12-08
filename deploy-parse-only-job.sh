@@ -42,7 +42,7 @@ gcloud run jobs deploy ${JOB_NAME} \
     --region=${REGION} \
     --project=${PROJECT_ID} \
     --service-account=${SERVICE_ACCOUNT} \
-    --set-env-vars="GCS_BUCKET_NAME=${GCS_BUCKET},GCS_INPUT_PATH=self_content_input,GCS_OUTPUT_PATH=final_output,LOCAL_MODE=false,AI_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,AI_TEMPERATURE=0.1,AI_MAX_CONTENT=6000,AI_DELAY=0.3,AI_TIMEOUT=45,AI_MAX_RETRIES=2" \
+    --set-env-vars="GCS_BUCKET_NAME=${GCS_BUCKET},GCS_INPUT_PATH=self_content_input,GCS_OUTPUT_PATH=final_output,LOCAL_MODE=false,AI_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,AI_TEMPERATURE=0.1,AI_MAX_CONTENT=6000,AI_DELAY=0.3,AI_TIMEOUT=45,AI_MAX_RETRIES=2,PARSING_THREADS=4" \
     --set-secrets="GEMINI_API_KEY=gemini-api-key:latest" \
     --max-retries=0 \
     --task-timeout=86400 \
@@ -62,6 +62,9 @@ echo "  Timeout: 24 hours (86400s)"
 echo "  Memory: 4Gi"
 echo "  CPU: 4"
 echo "  Max Retries: 0"
+echo ""
+echo "Multithreading Settings:"
+echo "  • Parsing Threads: 4 (parallel AI parsing)"
 echo ""
 echo "Optimized AI Settings:"
 echo "  • AI Delay: 0.3s per request (reduced from 0.5s)"

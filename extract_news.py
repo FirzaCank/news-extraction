@@ -14,6 +14,8 @@ import io
 from datetime import datetime
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 from google.cloud import storage
 from google.cloud import secretmanager
 
@@ -68,6 +70,7 @@ DELAY_BETWEEN_URLS = int(os.environ.get("DELAY_BETWEEN_URLS", "13"))
 DELAY_BETWEEN_PAGES = int(os.environ.get("DELAY_BETWEEN_PAGES", "8"))
 MAX_RETRIES = 3
 RETRY_DELAY = 5
+EXTRACTION_THREADS = int(os.environ.get("EXTRACTION_THREADS", "1"))
 
 # ============================================================================
 # GCS UTILITIES
@@ -513,14 +516,60 @@ def scrape_all_pages(url, token):
 # ============================================================================
 # BATCH PROCESSING
 # ============================================================================
+def scrape_single_url(url_data, token, ingestion_time, index, total):
+    """Scrape single URL - used by thread pool"""
+    url = url_data['url']
+    record_id = url_data['id']
+    record_date = url_data['date']
+    
+    thread_id = threading.current_thread().name
+    print(f"\n[{index}/{total}] ID:{record_id} (Thread: {thread_id})")
+    print(f"   URL: {url}")
+    
+    article_data = scrape_all_pages(url, token)
+    
+    if article_data and article_data['content']:
+        result = {
+            'success': True,
+            'id': record_id,
+            'date_article': record_date,
+            'url': url,
+            'title': article_data['title'],
+            'author': article_data['author'],
+            'content': article_data['content'],
+            'pages_scraped': article_data['pages_scraped'],
+            'method': article_data['method'],
+            'ingestion_time': ingestion_time,
+            'date': record_date
+        }
+        
+        word_count = len(article_data['content'].split())
+        print(f"\n✅ SUCCESS via {article_data['method'].upper()}")
+        print(f"   Title: {article_data['title'][:60]}...")
+        print(f"   Pages: {article_data['pages_scraped']}")
+        print(f"   Words: {word_count:,}")
+        return result
+    else:
+        print(f"\n❌ FAILED")
+        return {
+            'success': False,
+            'id': record_id,
+            'date_article': record_date,
+            'url': url,
+            'error': 'All methods failed',
+            'ingestion_time': ingestion_time,
+            'date': record_date
+        }
+
 def batch_scrape(url_data_list, token):
-    """Batch scraping dengan hybrid approach
+    """Batch scraping with multithreading support
     
     Args:
         url_data_list: List of dicts with {id, date, url}
         token: Diffbot API token
     """
     results = []
+    results_lock = threading.Lock()
     ingestion_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
     print("\n" + "=" * 80)
@@ -530,52 +579,63 @@ def batch_scrape(url_data_list, token):
     print(f"📄 Max pages per article: {MAX_PAGES}")
     print(f"🔄 Priority: Diffbot → Trafilatura (fallback)")
     print(f"🔁 Retry: {MAX_RETRIES}x for 403 errors (delay {RETRY_DELAY}s)")
+    print(f"🧵 Threads: {EXTRACTION_THREADS} parallel workers")
     print(f"⏰ Start time: {ingestion_time}")
     print("=" * 80)
     
-    for i, url_data in enumerate(url_data_list, 1):
-        url = url_data['url']
-        record_id = url_data['id']
-        record_date = url_data['date']
-        
-        print(f"\n[{i}/{len(url_data_list)}] ID:{record_id}")
-        print(f"   URL: {url}")
-        
-        article_data = scrape_all_pages(url, token)
-        
-        if article_data and article_data['content']:
-            results.append({
-                'success': True,
-                'id': record_id,
-                'date_article': record_date,  # Use date from input
-                'url': url,
-                'title': article_data['title'],
-                'author': article_data['author'],
-                'content': article_data['content'],
-                'pages_scraped': article_data['pages_scraped'],
-                'method': article_data['method'],
-                'ingestion_time': ingestion_time
-            })
+    if EXTRACTION_THREADS == 1:
+        # Single-threaded mode (original behavior)
+        for i, url_data in enumerate(url_data_list, 1):
+            result = scrape_single_url(url_data, token, ingestion_time, i, len(url_data_list))
+            results.append(result)
             
-            word_count = len(article_data['content'].split())
-            print(f"\n✅ SUCCESS via {article_data['method'].upper()}")
-            print(f"   Title: {article_data['title'][:60]}...")
-            print(f"   Pages: {article_data['pages_scraped']}")
-            print(f"   Words: {word_count:,}")
-        else:
-            results.append({
-                'success': False,
-                'id': record_id,
-                'date_article': record_date,
-                'url': url,
-                'error': 'All methods failed',
-                'ingestion_time': ingestion_time
-            })
-            print(f"\n❌ FAILED")
-        
-        if i < len(url_data_list):
-            print(f"⏳ Waiting {DELAY_BETWEEN_URLS}s before next URL...")
-            time.sleep(DELAY_BETWEEN_URLS)
+            # Save checkpoint every 100 items
+            if i % 100 == 0 and not LOCAL_MODE:
+                checkpoint_num = i // 100
+                print(f"\n📦 Saving checkpoint {checkpoint_num} (items 1-{i})...")
+                input_fname = url_data.get('input_filename', 'input')
+                save_checkpoint_to_gcs(results, GCS_BUCKET_NAME, input_fname, checkpoint_num)
+            
+            if i < len(url_data_list):
+                print(f"⏳ Waiting {DELAY_BETWEEN_URLS}s before next URL...")
+                time.sleep(DELAY_BETWEEN_URLS)
+    else:
+        # Multi-threaded mode
+        completed = 0
+        with ThreadPoolExecutor(max_workers=EXTRACTION_THREADS) as executor:
+            # Submit all tasks
+            future_to_data = {}
+            for i, url_data in enumerate(url_data_list, 1):
+                future = executor.submit(scrape_single_url, url_data, token, ingestion_time, i, len(url_data_list))
+                future_to_data[future] = (i, url_data)
+            
+            # Process completed tasks
+            for future in as_completed(future_to_data):
+                i, url_data = future_to_data[future]
+                try:
+                    result = future.result()
+                    with results_lock:
+                        results.append(result)
+                        completed += 1
+                        
+                        # Save checkpoint every 100 items
+                        if completed % 100 == 0 and not LOCAL_MODE:
+                            checkpoint_num = completed // 100
+                            print(f"\n📦 Saving checkpoint {checkpoint_num} (items 1-{completed})...")
+                            input_fname = url_data.get('input_filename', 'input')
+                            save_checkpoint_to_gcs(results, GCS_BUCKET_NAME, input_fname, checkpoint_num)
+                except Exception as e:
+                    print(f"\n❌ Thread error for item {i}: {str(e)}")
+                    with results_lock:
+                        results.append({
+                            'success': False,
+                            'id': url_data['id'],
+                            'date_article': url_data['date'],
+                            'url': url_data['url'],
+                            'error': f'Thread exception: {str(e)}',
+                            'ingestion_time': ingestion_time,
+                            'date': url_data['date']
+                        })
     
     return results
 
